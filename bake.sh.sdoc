@@ -28,4 +28,45 @@ declare -a __bake_outputs
 declare -a __bake_inputs
 declare -a __bake_commands
 
+Destructuring binds.
+Binding output variables requires us to do a destructuring bind to fill in the
+value of any % placeholders. We can do this easily enough by pulling all of the
+variables out, then matching against bash shell expansion one by one.
 
+Match semantics aren't completely straightforward. In particular, bake supports
+implicit plurality for glob-style values. So, for example, you can write stuff
+like this:
+
+| bake %files.c = foo.c bar.c
+
+This will result in %files = foo bar. This works because bake implements a
+distributive property of string concatenation and variables:
+
+| bake %var = val0 val1 ... valN
+  [pfx]%var[sfx] = [pfx]val0[sfx] [pfx]val1[sfx] ... [pfx]valN[sfx]
+
+Normally bake will stick to just one value per variable (TODO: figure this out)
+
+__bake_parse_vars() {
+  # FIXME
+
+  # Returns location of each variable as a pair of numbers (start, length). For
+  # example:
+  # __bake_parse_vars "foo %bar.c %bif.baz" -> 4 4 11 4
+  #                    0123456789012345678
+  local str=$1
+  local eaten=0
+
+  while [[ $str =~ ^([^%]*)(%\w+)(.*)$ ]]; do
+    eaten=$((eaten + ${#BASH_REMATCH[1]}))
+    echo $eaten ${#BASH_REMATCH[2]}
+    eaten=$((eaten + ${#BASH_REMATCH[2]}))
+    str=${BASH_REMATCH[3]}
+  done
+}
+
+__bake_match() {
+  # Destructures the specified string against the template, returning one
+  # variable match per line if successful. You should use __bake_parse_vars to
+  # get the list of variables corresponding to the matched values.
+}
