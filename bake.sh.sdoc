@@ -5,6 +5,27 @@
 Introduction.
 Shell definitions for the bake build system. This consists of a single
 function, 'bake', and a series of internal state variables prefixed with
-`__bake_`.
+`__bake_`. Modify these at your peril.
 
-TODO
+Bake state.
+We maintain the rule tables in a few different formats for speed (bash isn't
+the most cooperative about data structures). This turns out to be simple enough
+because rules have just three pieces:
+
+| 1. Output variable(s).
+  2. Input variable(s), some of which are inferred from the command.
+  3. Command, which can contain both input and output variables.
+
+Here's how rules are broken down:
+
+| bake %x.o : %x.c :: gcc -c %x.c -o %x.o
+       |out|  |in|    |---- command ----|
+
+Expansion involves doing a destructuring bind against the out-vars, then
+binding those up and expanding the inputs and commands accordingly.
+
+declare -a __bake_outputs
+declare -a __bake_inputs
+declare -a __bake_commands
+
+
