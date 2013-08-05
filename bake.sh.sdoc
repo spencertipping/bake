@@ -1,0 +1,10 @@
+#!/bin/bash
+# Bake shell definitions | Spencer Tipping
+# Licensed under the terms of the MIT source code license
+
+Introduction.
+Shell definitions for the bake build system. This consists of a single
+function, 'bake', and a series of internal state variables prefixed with
+`__bake_`.
+
+TODO

@@ -1,0 +1,4 @@
+#!/usr/bin/env bake
+bake %x.md : %x.sdoc :: 'sdoc cat markdown::%x.sdoc > %x.md'
+bake %x    : %x.sdoc :: 'sdoc cat     code::%x.sdoc > %x'
+bake all : bake bake.sh
