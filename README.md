@@ -1,5 +1,5 @@
 # bake: `make` in bash
-** NOTE: work in progress **
+**NOTE: work in progress**
 
 `bake` is a simple bash setup that lets you write makefile-style automation in
 bash. Like GNU make, it does dependency analysis and topsorting, and it
@@ -8,8 +8,9 @@ from other scripts. The `bake` wrapper script just loads this library into bash
 and runs the `bakefile` in the current directory.
 
 ## Simple example
+Here's a fairly simple bakefile for a C project:
+
 ```sh
-$ cat bakefile
 #!/usr/bin/env bake
 # Rules for compiling C files
 bake %name-debug.o : include/*.h :: gcc -DDEBUG $OPTS %name.c -o %name.o
@@ -23,7 +24,11 @@ bake %bin       :: ld -lc %modules.o -o %bin
 # High-level tasks
 bake all : foo-debug foo        # virtual: no command
 bake : all                      # specify that 'all' is the default
+```
 
+And here are some things you can do with it:
+
+```
 $ bake -l               # list rules
 %name-debug.o : %name.c include/bar.h include/foo.h
 %name.o : %name.c include/bar.h include/foo.h
@@ -41,5 +46,4 @@ bake: would remove foo-debug foo bar-debug.o bif-debug.o foo-debug.o bar.o
 bif.o foo.o
 bake: (use bake --clean -f ... to actually do this)
 $ bake --clean -f :all
-$
 ```
