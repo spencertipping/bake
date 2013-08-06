@@ -1,5 +1,0 @@
-#!/bin/bash
-# Bake: bash build tool | Spencer Tipping
-# Licensed under the terms of the MIT source code license
-
-echo you ran bake, which is a work in progress

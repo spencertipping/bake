@@ -2,4 +2,30 @@
 # Bake function definition | Spencer Tipping
 # Licensed under the terms of the MIT source code license
 
-# TODO
+Introduction.
+Bake provides a single entry point, the `bake-instance` function. The global
+`bake-instance` function is a way to create bake instances, each of which is a
+function that operates on a dependency graph. Instances are isolated from each
+other. Because of this design, bake ends up compiling a new function each time
+you create an instance. Bash doesn't officially support closures, but we can
+come close by using eval to compile references to global names.
+
+An instance called "bake" is available to bakefiles. See
+[bake-template](./bake-template) for details about how this works.
+
+Bake-instance usage.
+Most of the configuration is done after you create an instance; this function
+just takes the name of the instance you want to create.
+
+bake-instance() {
+local instance_name=$1
+
+State definitions.
+Conceptually speaking, a bake instance stores two pieces of state: the list of
+bake rules and the list of global variables. However, bash isn't helpful about
+representing data structures, so we split the bake rules into three separate
+arrays and store four pieces of state.
+
+
+
+}
