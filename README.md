@@ -30,11 +30,20 @@ and runs the `bakefile` in the current directory.
   need it)
 - Written in bash
 
-## Example
-Here's a bakefile you might use for a C project:
+## A simple bakefile
+```sh
+#!/bin/bash
+bake %bin : %bin.c :: gcc -o %out %in
+```
+
+You could then run `bake foo` to compile `foo.c` into `foo`.
+
+## A more complex bakefile
+You can do everything bash normally lets you do within the context of a
+bakefile:
 
 ```sh
-#!/usr/bin/env bake
+#!/bin/bash
 # Rules for compiling C files
 create_gcc_rule() {
   local suffix=$1
@@ -48,13 +57,16 @@ create_gcc_rule -debug -DDEBUG -g
 create_gcc_rule -opt   -O3
 
 # Rules to build executables
-bake %modules.c = *.c           # destructuring bind
-bake %bin-debug :: ld -lc %modules-debug.o -o %bin-debug
-bake %bin       :: ld -lc %modules.o       -o %bin
+bake %modules.c = *.c                   # destructuring bind
 
-# High-level tasks
-bake all : foo-debug foo        # virtual: no command
-bake : all                      # specify that 'all' is the default
+libs="-lc"
+ld_command="ld $libs %in -o %out"       # %in = all inputs, %out = all outputs
+bake %bin-opt   : %modules-opt.o   :: $ld_command
+bake %bin-debug : %modules-debug.o :: $ld_command
+bake %bin       : %modules.o       :: $ld_command
+
+# Default build target
+bake : foo{,-debug,-opt}
 ```
 
 And here are some things you can do with it:
@@ -62,19 +74,22 @@ And here are some things you can do with it:
 ```
 $ bake -l               # list rules
 %name-debug.o : %name.c include/bar.h include/foo.h
+%name-opt.o : %name.c include/bar.h include/foo.h
 %name.o : %name.c include/bar.h include/foo.h
 %bin-debug : bar-debug.o bif-debug.o foo-debug.o
+%bin-opt : bar-opt.o bif-opt.o foo-opt.o
 %bin : bar.o bif.o foo.o
-all : foo-debug foo
-$ bake foo              # outputs nothing, but makes foo
-$ bake -v all           # this is how you get a trace
+: foo-opt foo-debug foo
+$ bake foo foo-opt      # outputs nothing, but makes foo and foo-opt
+$ bake -v               # this is how you get a trace
 bake: bar-debug.o : bar.c include/bar.h include/foo.h
 bake: bif-debug.o : bif.c include/bar.h include/foo.h
 bake: foo-debug.o : foo.c include/bar.h include/foo.h
 bake: foo-debug : bar-debug.o bif-debug.o foo-debug.o
-$ bake --clean all
-bake: would remove foo-debug foo bar-debug.o bif-debug.o foo-debug.o bar.o
-bif.o foo.o
-bake: (use bake --clean -f ... to actually do this)
-$ bake --clean -f :all
+$ bake --clean
+bake: would remove foo-opt foo-debug foo bar-debug.o bif-debug.o foo-debug.o
+bar.o bif.o foo.o bar-opt.o bif-opt.o foo-opt.o
+bake: (use bake --clean -f to actually do this)
+$ bake --clean -f       # also outputs nothing
+$
 ```

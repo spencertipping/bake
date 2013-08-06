@@ -9,4 +9,13 @@ sdoc_to_code() {
 
 bake %x.md : %x.sdoc :: sdoc_to_markdown %x
 bake %x    : %x.sdoc :: sdoc_to_code %x
-bake : bake bake.sh
+
+create_bake() {
+  cat bake.sh bake-template > bake
+  chmod +x bake
+}
+
+bake %sdocs.sdoc = *.sdoc
+
+bake bake : bake.sh bake-template :: create_bake
+bake : bake bake.sh %sdocs.md

@@ -26,6 +26,27 @@ bake rules and the list of global variables. However, bash isn't helpful about
 representing data structures, so we split the bake rules into three separate
 arrays and store four pieces of state.
 
+Here's what this state looks like:
+
+| bake %x.o : %x.c :: gcc -c %x.c -o %x.o
+       |out|  |in|    |---- command ----|
+
+In the case of global variables and functions, we store this:
+
+| bake %xs.c %ys = foo.c bar bif.c baz.c
+       |- var -|   |------ value ------|
+
+Bake analyzes global bindings to see whether caching is possible. If so, the
+above would be rewritten:
+
+| bake %xs = foo bif baz
+  bake %ys = bar
+
+Not all bindings can be rewritten, however. Functions, for example, must be
+re-expanded each time:
+
+| bake foo-%x = %x.foo
+
 
 
 }
