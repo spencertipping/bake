@@ -11,7 +11,7 @@ eagerly. For example, you could write this:
 # grounded rule; this won't run unless %x.c exists
 bake %x.o : %x.c :: gcc -c %< -o %@
 
-# ungrounded rule; this could easily run if %x.c and %x.h don't exist
+# ungrounded rule; this will run even if %x.c and %x.h don't exist
 bake deps_for_%x.o = %x.c %x.h \
   :: echo "just calculated deps for %x.o"
 
@@ -21,6 +21,6 @@ bake --echo deps_for_foo.o              # -> just calculated deps for foo.o
 
 The mnemonic is that `:` is read as "given" or "provided"; you're stating a
 precondition. `=`, on the other hand, is read as "means" or "is equivalent to".
-The validity of rewriting `=` is invariant with the availability of the terms
-on the right-hand side. Note that both `:` and `=` support side-effects, but
-side-effects behave differently between the two.
+The validity of rewriting a `=` form is invariant with the availability of the
+terms on the right-hand side. Note that both `:` and `=` support side-effects,
+but side-effects behave differently between the two.

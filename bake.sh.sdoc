@@ -18,35 +18,71 @@ Most of the configuration is done after you create an instance; this function
 just takes the name of the instance you want to create.
 
 bake-instance() {
-local instance_name=$1
+local name=$1
+
+if [[ $# != 1 ]]; then
+  echo "usage: bake-instance <instance-name>"
+  return 1
+fi
 
 State definitions.
-Conceptually speaking, a bake instance stores two pieces of state: the list of
-bake rules and the list of global variables. However, bash isn't helpful about
-representing data structures, so we split the bake rules into three separate
-arrays and store four pieces of state.
+Every stateful definition in bake is represented as a rule, which has three
+parts, or a global, which has one. Here's a rule:
 
-Here's what this state looks like:
+| bake %x.o : %x.c :: gcc -c %in -o %out
+       |out|  |in|    |--- command ----|
 
-| bake %x.o : %x.c :: gcc -c %x.c -o %x.o
-       |out|  |in|    |---- command ----|
+And here's a global:
 
-In the case of global variables and functions, we store this:
+| bake %modules.c %others = *
 
-| bake %xs.c %ys = foo.c bar bif.c baz.c
-       |- var -|   |------ value ------|
+Globals are stored by name in their own variables. For example, the above
+definition will create these bindings:
 
-Bake analyzes global bindings to see whether caching is possible. If so, the
-above would be rewritten:
+| declare -a __bake_$name_global_modules=(...)
+  declare -a __bake_$name_global_others=(...)
 
-| bake %xs = foo bif baz
-  bake %ys = bar
+Note that because of this indirection, any reference we make to a global
+variable will be from dynamically compiled code.
 
-Not all bindings can be rewritten, however. Functions, for example, must be
-re-expanded each time:
+You can't combine globals with locals. For example, you can't write this:
 
-| bake foo-%x = %x.foo
+| bake %modules.%ext = *.%ext           # invalid
 
+The reason is that this definition wouldn't give a value to `%modules`; it
+would just make `%modules` a part of another rewriting rule (and somewhat
+counterintuitively, a literal). The rule is that the right-hand side of any
+global assignment must be fully-specified at definition time.
 
+Like grounded rules, ungrounded rules can have commands:
+
+| bake inputs-for-%x.o = %x.c %x.h :: echo "hi"
+       |---- out ----|   |- in --|    |command|
+
+Note that bake assumes that any command attached to an ungrounded edge is cheap
+to execute. As such, these commands are not parallelized and ungrounded edges
+are executed speculatively.
+
+As a special case, any variable that is bound but not referenced becomes
+global. This is why you can do things like this:
+
+| bake %xs.c %others = *                # bash expands the *
+  bake --echo %xs %others
+
+Bake lets you throw away pieces of a binding form without creating a global by
+using *, which will match text but won't bind it to anything. (In fact, any
+other bash glob-matching stuff is also fair game.)
+
+eval "
+# Grounded rules
+declare -a __bake_${name}_g_out
+declare -a __bake_${name}_g_in
+declare -a __bake_${name}_g_commands
+
+# Ungrounded rules
+declare -a __bake_${name}_u_out
+declare -a __bake_${name}_u_in
+declare -a __bake_${name}_u_commands
+"
 
 }
