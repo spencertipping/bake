@@ -19,6 +19,7 @@ just takes the name of the instance you want to create.
 
 bake-instance() {
 local name=$1
+local prefix=__bake_$name
 
 if [[ $# != 1 ]]; then
   echo "usage: bake-instance <instance-name>"
@@ -61,28 +62,58 @@ Like grounded rules, ungrounded rules can have commands:
 
 Note that bake assumes that any command attached to an ungrounded edge is cheap
 to execute. As such, these commands are not parallelized and ungrounded edges
-are executed speculatively.
-
-As a special case, any variable that is bound but not referenced becomes
-global. This is why you can do things like this:
-
-| bake %xs.c %others = *                # bash expands the *
-  bake --echo %xs %others
-
-Bake lets you throw away pieces of a binding form without creating a global by
-using *, which will match text but won't bind it to anything. (In fact, any
-other bash glob-matching stuff is also fair game.)
+are executed speculatively and possibly multiple times.
 
 eval "
 # Grounded rules
-declare -a __bake_${name}_g_out
-declare -a __bake_${name}_g_in
-declare -a __bake_${name}_g_commands
+declare -a ${prefix}_g_out
+declare -a ${prefix}_g_in
+declare -a ${prefix}_g_commands
 
 # Ungrounded rules
-declare -a __bake_${name}_u_out
-declare -a __bake_${name}_u_in
-declare -a __bake_${name}_u_commands
+declare -a ${prefix}_u_out
+declare -a ${prefix}_u_in
+declare -a ${prefix}_u_commands
+
+# List of globals (so we can print them later)
+declare -a ${prefix}_globals
+
+# Configuration
+declare ${prefix}_exit_with=exit
+declare ${prefix}_backend=bake-backend-sha
+declare -a ${prefix}_init
+declare -a ${prefix}_finalize
+
+# Inspection functions
+${prefix}_print_rules() {
+  local i
+  for (( i = 0; i < \${#${prefix}_g_out[@]}; ++i )); do
+    echo \${${prefix}_g_out[\$i]} : \\
+         \${${prefix}_g_in[\$i]} :: \\
+         \${${prefix}_g_command[\$i]}
+  done
+
+  for (( i = 0; i < \${#${prefix}_u_out[@]}; ++i )); do
+    echo \${${prefix}_u_out[\$i]} = \\
+         \${${prefix}_u_in[\$i]} :: \\
+         \${${prefix}_u_command[\$i]}
+  done
+}
+
+${prefix}_print_globals() {
+  local g
+  for g in \"\${${prefix}_globals[@]}\"; do
+    echo -n %\$g =
+    eval \"echo \\\${${prefix}_global_\$g[@]}\"
+  done
+}
 "
+
+Variable handling logic.
+Code to bind and expand expressions with variables. This is optimized in some
+small ways by doing things like using bash wildcard matching as a preliminary
+check.
+
+
 
 }
