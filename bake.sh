@@ -194,13 +194,17 @@ __bake_match() {
       v=${BASH_REMATCH[3]}
     done
 
+    # An empty match pattern means that the user typed something like 'bake % =
+    # foo'.
+    [[ -n $match_pattern ]] || return 3
+
     local namecount=${#variable_names[@]}
 
     local m
     for m in "${matching[@]}"; do
       # This should always match; but if it doesn't, we need to signal an error
       # indicating that something is way wrong.
-      eval [[ \"$m\" =~ $match_pattern ]] || return 3
+      eval [[ \"$m\" =~ $match_pattern ]] || return 4
 
       for (( j = 0; j < namecount; ++j )); do
         local binding_value=${BASH_REMATCH[j + 1]}
@@ -407,7 +411,9 @@ __bakeinst_defglobal() {
        return 1 ;;
     2) echo "bake: $name is not a valid pattern (repeated variable)"
        return 1 ;;
-    3) echo "bake: $name = $value failed; this is a bug in bake"
+    3) echo "bake: $name is not a valid pattern (anonymous variable)"
+       return 1 ;;
+    4) echo "bake: $name = $value failed; this is a bug in bake"
        echo "bake: please file an issue: github.com/spencertipping/bake"
        return 1 ;;
   esac
@@ -467,13 +473,10 @@ __bakeinst_solve() {
   local solved_edge_fn=$1
   local -a goals=( "${@:1}" )
 
-  local -a backtrace=()
-  local -a intermediates=()
-  local -a commands=()
-
   # Precondition: if we have a match-everything rule, we also need at least one
   # terminal rule.
   local -a terminal_rules=()
+  local -a nonterminal_rules=()
   local -a everything_rules=()
 
   for i in ${!__bakeinst_u_out[@]}; do
@@ -483,7 +486,11 @@ __bakeinst_solve() {
     [[ -n ${profile//[ %]/} ]] || everything_rules[${#everything_rules[@]}]=$i
 
     # Terminal rules are easier: they have no inputs.
-    [[ -n ${__bakeinst_u_in[i]} ]] || terminal_rules[${#terminal_rules[@]}]=$i
+    if [[ -z ${__bakeinst_u_in[i]} ]]; then
+      terminal_rules[${#terminal_rules[@]}]=$i
+    else
+      nonterminal_rules[${#nonterminal_rules[@]}]=$i
+    fi
   done
 
   if (( ${#everything_rules[@]} && !${#terminal_rules[@]} )); then
@@ -491,12 +498,19 @@ __bakeinst_solve() {
     echo 'bake: but no terminal rules. This would result in a nonterminating'
     echo 'bake: graph search. You need to add some terminal rules, for example'
     echo 'bake:'
-    echo 'bake: $ bake %.c :'
-    echo 'bake: $ bake %.h :'
+    echo 'bake: $ bake --terminal %.c %.h'
+    echo 'bake:'
+    echo "bake: This will inform bake that *.c and *.h have no dependencies."
     return 1
   fi
 
-  # TODO
+# Search algorithm.
+
+
+  while (( ${#goals[@]} )); do
+    local -a new_goals=()
+    
+  done
 }
 
 # Interface layer.
