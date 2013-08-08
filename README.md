@@ -9,9 +9,10 @@ and runs the `bakefile` in the current directory.
 
 ## Features
 - Correctness (uses sha-256 to track contents, though you can change this)
+- Generality (track any kind of contents, not just files)
 - Parallel job execution
-- Remote job execution (requires passwordless SSH and sshfs)
-- Seamless bash interoperability
+- Remote job execution (requires passwordless SSH)
+- Can be used directly from the command line
 - You can use bake as a library from an existing script
 - Dependency graphs are first-class (so you can ask bake how it would build
   something, then use that output from your script)
@@ -28,7 +29,27 @@ and runs the `bakefile` in the current directory.
 - No integration with autoconf, automake, etc
 - Less portable than GNU make (but it should work everywhere you're likely to
   need it)
+- Requires bash 3 or later
 - Written in bash
+
+## bashrc usage
+This is the simplest way to use bake. Source `bake.sh` from your bashrc, then
+create a bake instance (a namespace for rules and globals):
+
+```sh
+# ... bashrc stuff ...
+
+source ~/path/to/bake.sh
+bake-instance bk
+```
+
+Then in your shell:
+
+```sh
+$ bk %x.o : %x.c :: gcc -c %in -o %out
+$ bk foo.o              # compiles if necessary
+$
+```
 
 ## A simple bakefile
 ```sh

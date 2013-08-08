@@ -13,18 +13,496 @@ come close by using eval to compile references to global names.
 An instance called "bake" is available to bakefiles. See
 [bake-template](./bake-template) for details about how this works.
 
+Variable handling logic.
+Code to bind and expand expressions with variables. This is optimized in some
+small ways by doing things like using bash wildcard matching as a preliminary
+check. This code can be global because it doesn't rely on any instance state.
+
+The first function we need is one that attempts to match a variable-laden
+template against some text. This function prints two space-separated values per
+matched variable: var-name and match-text. match-text may be empty, but if
+present it is safe to parse it into an array variable.
+
+Here are some edge cases of matching:
+
+| bake %xs.c %ys = foo.c bar bif.c      # %xs = foo bif, %ys = bar
+  bake %xs.c %ys.c = foo.c bar.c bif.c  # %xs = foo, %ys = bar bif
+  bake %xs.c %ys.c = foo.c bar.c        # %xs = foo, %ys = bar
+  bake %xs.c = foo.c bar.c bif          # no match; return 1
+  bake %xs.c.h %ys.h = foo.c.h bar.c.h  # %xs = foo bar, %ys =
+  bake %x %y = foo bar                  # %x = foo, %y = bar
+  bake %x %y = foo bar bif baz          # %x = foo, %y = bar bif baz
+
+So the idea is that any variable with repeated factors will bind just once, and
+the last will eat anything remaining.
+
+Another set of cases involves cross-multiplication:
+
+| bake %x.%y = foo.c bar.h              # no match
+  bake %x.%y = foo.c bar.c              # %x = foo bar, %y = c
+  bake %x.%y = foo.c foo.h              # %x = foo, %y = c h
+  bake %x.%y %z = foo.c bar.h           # %x = foo, %y = c, %z = bar.h
+
+Bake does not collapse cross-multiplied values with the distributive property.
+Specifically, when matching multiple variables it will assume that at most one
+is plural:
+
+| bake %x.%y = a.c a.d b.c b.d          # no match
+
+You can't reuse variables within a binding pattern, even if they are factored
+differently:
+
+| bake %x %x = a a                      # error: bad pattern
+  bake %x.%y %x = a.c a                 # error: bad pattern
+
+The first thing we need to do is be able to "factor" text. For example,
+factoring the string "foo bar.c bif.c" by the pattern "%.c" should give us two
+values, "bar.c bif.c" and "foo". `__bake_factor` does this, returning the two
+strings with a tab between them.
+
+__bake_factor() {
+  local factor=$1
+  local -a text=( $2 )
+
+  local factor_pattern=${factor//%/*}
+  local -a matching=()
+  local -a remainder=()
+  local w
+  for w in "${text[@]}"; do
+    if [[ $w == $factor_pattern ]]; then
+      matching[${#matching[@]}]=$w
+    else
+      remainder[${#remainder[@]}]=$w
+    fi
+  done
+  echo "${matching[@]}" $'\t' "${remainder[@]}"
+}
+
+__bake_factor_profile() {
+  local v=$1
+
+  # Replace all named variables with anonymous % characters.
+  while [[ $v =~ ^(.*)%([A-Za-z0-9_]+)(.*)$ ]]; do
+    v="${BASH_REMATCH[1]}%${BASH_REMATCH[3]}"
+  done
+  echo "$v"
+}
+
+__bake_match() {
+  local -a vars=( $1 )
+  local -a text=( $2 )
+
+  local -a profiles=()
+  local i
+
+  for (( i = 0; i < ${#vars[@]}; ++i )); do
+    profiles[i]="$(__bake_factor_profile "${vars[i]}")"
+  done
+
+  local -a unique_variables
+  for (( i = 0; i < ${#vars[@]}; ++i )); do
+    local v=${vars[i]}
+    while [[ $v =~ %([A-Za-z0-9_]+)(.*)$ ]]; do
+      unique_variables[${#unique_variables[@]}]=${BASH_REMATCH[1]}
+      v=${BASH_REMATCH[2]}
+    done
+  done
+
+  # Check for duplicate references to any variable. If there are any, exit
+  # early.
+  for (( i = 0; i < ${#unique_variables[@]}; ++i )); do
+    local j
+    for (( j = i + 1; j < ${#unique_variables[@]}; ++j )); do
+      if [[ ${unique_variables[i]} == ${unique_variables[j]} ]]; then
+        return 2
+      fi
+    done
+  done
+
+  for (( i = 0; i < ${#vars[@]}; ++i )); do
+    local v=${vars[i]}
+    local v_factor_profile=${profiles[i]}
+
+    # A couple of things to check at this point. First, is there another
+    # variable whose factor profile matches this one? If so, this variable is
+    # singular; otherwise it's plural.
+    local factor_profile_matches=
+    local j
+    for (( j = i + 1; j < ${#vars[@]}; ++j )); do
+      if [[ ${profiles[j]} == ${v_factor_profile[i]} ]]; then
+        factor_profile_matches=1
+        break
+      fi
+    done
+
+    local lines="$(__bake_factor "$v_factor_profile" "${text[*]}")"
+    local -a matching=( ${lines%$'\t'*} )
+    local -a remainder=( ${lines#*$'\t'} )
+
+    # Construct a regexp match pattern based on the variable template. We then
+    # bind up matching instances into the bindings[] array, which is
+    # interleaved by the number of variables.
+    local -a variable_names=()
+    local -a bindings=()
+    local plural_index=-1
+    local match_pattern=${v%%%*}
+    while [[ $v =~ %([A-Za-z0-9_]+)([^%]*)(.*)$ ]]; do
+      variable_names[${#variable_names[@]}]=${BASH_REMATCH[1]}
+      match_pattern="$match_pattern(.*)\"${BASH_REMATCH[2]}\""
+      v=${BASH_REMATCH[3]}
+    done
+
+    local namecount=${#variable_names[@]}
+
+    local m
+    for m in "${matching[@]}"; do
+      # This should always match; but if it doesn't, we need to signal an error
+      # indicating that something is way wrong.
+      eval [[ \"$m\" =~ $match_pattern ]] || return 3
+
+      for (( j = 0; j < namecount; ++j )); do
+        local binding_value=${BASH_REMATCH[j + 1]}
+
+        if (( plural_index != j && ${#bindings[@]} >= namecount )); then
+          # Check to see whether we're introducing plurality. That is, binding
+          # the variable to a value distinct from its earlier bindings. If we
+          # are and we already have a plural index, then the match fails.
+          #
+          # We can optimize this a bit. We know that at most one variable can
+          # be plural, so we can check just the first value. All others will be
+          # identical to it.
+
+          if [[ ${bindings[j]} != $binding_value ]]; then
+            if (( plural_index == -1 )); then
+              plural_index=$j
+            else
+              return 1
+            fi
+          fi
+        fi
+
+        bindings[${#bindings[@]}]=$binding_value
+      done
+
+      # If we have future occurrences of this profile, then just bind one of
+      # the matching options.
+      if [[ -n $factor_profile_matches ]]; then
+        text=( "${matching[@]:1}" "${remainder[@]}" )
+        break
+      fi
+    done
+
+    if [[ -z $factor_profile_matches ]]; then
+      # We've bound up every matching term at this point, so all we have left
+      # are remainders.
+      text=( "${remainder[@]}" )
+    fi
+
+    # Print the bindings in the return-value format. Display only the unique
+    # values for each binding.
+    for (( j = 0; j < namecount; ++j )); do
+      echo -n "${variable_names[j]}"
+
+      if (( j == plural_index )); then
+        for (( k = j; k < ${#bindings[@]}; k += namecount )); do
+          echo -n " ${bindings[k]}"
+        done
+      else
+        echo -n " ${bindings[j]}"
+      fi
+      echo
+    done
+  done
+
+  # We shouldn't have any text left. If we do, then return 1; the match didn't
+  # consume all of the text.
+  [[ -z $text ]]
+}
+
+String expansion.
+The opposite of variable binding. This logic is much simpler, too; there aren't
+many special cases involved.
+
+__bake_expand() {
+  local oifs=$IFS
+  IFS=$'\n'
+  local -a bindings=( $1 )
+  IFS=$oifs
+  local -a text=( $2 )
+
+  local -a names=()
+  local -a values=()
+
+  local b
+  for b in "${bindings[@]}"; do
+    local -a var_and_values=( $b )
+    names[${#names[@]}]=${var_and_values[0]}
+    values[${#values[@]}]=${var_and_values[*]:1}
+  done
+
+  local -a result=()
+  local word
+  for word in "${text[@]}"; do
+    local -a expansion=( "" )
+
+    # Parse out until we hit a variable.
+    while [[ -n $word && $word =~ ^([^%]*)(%[A-Za-z0-9_]+)?(.*)$ ]]; do
+      # Append any static text to each entry.
+      local i
+      for i in ${!expansion[@]}; do
+        expansion[$i]="${expansion[i]}${BASH_REMATCH[1]}"
+      done
+
+      # If we have a variable, look up its value and multiply by the current
+      # expansion. If we can't find the variable, append its name literally.
+      if [[ -n ${BASH_REMATCH[2]} ]]; then
+        local var_name=${BASH_REMATCH[2]:1}
+        local found_var=
+        for i in ${!names[@]}; do
+          if [[ ${names[i]} == $var_name ]]; then
+            # Expand and multiply.
+            local -a value=( ${values[i]} )
+            local -a new_expansion=()
+
+            local v
+            for v in "${value[@]}"; do
+              local e
+              for e in "${expansion[@]}"; do
+                new_expansion[${#new_expansion[@]}]=$e$v
+              done
+            done
+
+            expansion=( "${new_expansion[@]}" )
+            found_var=1
+            break
+          fi
+        done
+
+        if [[ -z $found_var ]]; then
+          local i
+          for i in "${!expansion[@]}"; do
+            expansion[$i]=${expansion[i]}%$var_name
+          done
+        fi
+      fi
+
+      word=${BASH_REMATCH[3]}
+    done
+
+    result=( "${result[@]}" "${expansion[@]}" )
+  done
+
+  echo "${result[*]}"
+}
+
+Instance bookkeeping function templates.
+These are later rewritten to create an instance (hence the __bakeinst
+placeholders).
+
+__bakeinst_print_rules() {
+  local i
+  for i in ${!__bakeinst_g_out[@]}; do
+    echo ${__bakeinst_g_out[i]} : \
+         ${__bakeinst_g_in[i]} :: \
+         ${__bakeinst_g_command[i]}
+  done
+
+  for i in ${!__bakeinst_u_out[@]}; do
+    echo ${__bakeinst_u_out[i]} = \
+         ${__bakeinst_u_in[i]} :: \
+         ${__bakeinst_u_command[i]}
+  done
+}
+
+__bakeinst_print_globals() {
+  local g
+  for g in "${__bakeinst_globals[@]}"; do
+    local -a split=( $g )
+    echo "%${split[0]} = ${split[@]:1}"
+  done
+}
+
+Definition code templates.
+Functions to define rules and globals. This requires some argument parsing to
+happen ahead of time; that is, these functions expect their arguments to be
+positional and properly quoted.
+
+__bakeinst_defgrounded() {
+  local outvars=$1
+  local invars=$2
+  local cmd=$3
+  __bakeinst_g_out[${#__bakeinst_g_out[@]}]=$outvars
+  __bakeinst_g_in[${#__bakeinst_g_in[@]}]=$invars
+  __bakeinst_g_commands[${#__bakeinst_g_commands[@]}]=$cmd
+}
+
+__bakeinst_defungrounded() {
+  local outvars=$1
+  local invars=$2
+  local cmd=$3
+  __bakeinst_u_out[${#__bakeinst_u_out[@]}]=$outvars
+  __bakeinst_u_in[${#__bakeinst_u_in[@]}]=$invars
+  __bakeinst_u_commands[${#__bakeinst_u_commands[@]}]=$cmd
+}
+
+__bakeinst_defglobal() {
+  local name=$1
+  local value=$2
+
+  # IFS needs to be its usual value when we call __bake_match
+  local match_result="$(__bake_match "$name" "$value" || echo $?)"
+
+  local oifs=$IFS
+  IFS=$'\n'
+  local -a bindings=( $match_result )
+  IFS=$oifs
+
+  case "${bindings[*]}" in
+    1) echo "bake: $name failed to match $value"
+       $__bakeinst_exit_with 1 ;;
+    2) echo "bake: $name is not a valid pattern (repeated variable)"
+       $__bakeinst_exit_with 1 ;;
+    3) echo "bake: $name = $value failed; this is a bug in bake"
+       echo "bake: please file an issue: github.com/spencertipping/bake"
+       $__bakeinst_exit_with 1 ;;
+  esac
+
+  local b
+  for b in "${bindings[@]}"; do
+    local varname=${b%% *}
+    local i
+    local index=${#__bakeinst_globals[@]}
+    for i in ${!__bakeinst_globals[@]}; do
+      local gname=${__bakeinst_globals[i]}
+      if [[ ${gname%% *} == $varname ]]; then
+        index=$i
+        break
+      fi
+    done
+    __bakeinst_globals[$index]=$b
+  done
+}
+
+Interface layer.
+This is where we parse out stuff like `bake %foo.c = bar.c` into its underlying
+commands. Here are the rules we use:
+
+| 1. If any option indicates a special command, then we use that.
+  2. Otherwise, and if there is no `:`, `=`, or `::`, then the user is telling
+     us we need to build something.
+  3. Otherwise, the user is defining something.
+
+Definition cases:
+
+| 1. If we see `=`, no `::`, and the right-hand side can be expanded to a form
+     that contains no variables, then it's a global definition.
+  2. Otherwise, if we see `=`, then it's ungrounded.
+  3. Otherwise it's grounded.
+
+Here's the definition function, which takes all args from `bake`:
+
+__bakeinst_define() {
+  local -a outvars=()
+  local -a invars=()
+  local cmd=
+
+  local parsing=outvars
+  local grounded=
+
+  while (( $# )); do
+    local arg=$1
+    shift
+
+    if [[ $parsing == outvars ]]; then
+      if [[ $arg == : ]]; then
+        parsing=invars
+        grounded=1
+        continue
+      elif [[ $arg == = ]]; then
+        parsing=invars
+        grounded=
+        continue
+      elif [[ $arg == :: ]]; then
+        parsing=cmd
+        grounded=1
+        continue
+      fi
+    elif [[ $parsing == invars && $arg == :: ]]; then
+      parsing=cmd
+      continue
+    fi
+
+    case $parsing in
+      outvars) outvars[${#outvars[@]}]=$arg ;;
+      invars)  invars[${#invars[@]}]=$arg ;;
+      *)       cmd="$arg $*"; break ;;
+    esac
+  done
+
+  # Is it a global? Try expanding the RHS (invars) to see.
+  local oifs=$IFS
+  IFS=$'\n'
+  local globals="${__bakeinst_globals[@]}"
+  IFS=$oifs
+
+  local expanded_rhs="$(__bake_expand "$globals" "${invars[*]}")"
+
+  if [[ ${expanded_rhs/%/} == $expanded_rhs \
+        && -z $grounded && -z $cmd ]]; then
+    # No expanded stuff and no cmd; probably a global.
+    __bakeinst_defglobal "${outvars[*]}" "$expanded_rhs"
+  elif [[ -n $grounded ]]; then
+    __bakeinst_defgrounded "${outvars[*]}" "${invars[*]}" "$cmd"
+  else
+    __bakeinst_defungrounded "${outvars[*]}" "${invars[*]}" "$cmd"
+  fi
+}
+
+__bakeinst_should_define() {
+  for arg in "$@"; do
+    if [[ $arg == = || $arg == : || $arg == :: ]]; then
+      return 0  # success = should define something
+    fi
+  done
+  return 1      # failure = no definition
+}
+
+__bakeinst_expand() {
+  local oifs=$IFS
+  IFS=$'\n'
+  local globals="${__bakeinst_globals[*]}"
+  IFS=$oifs
+  __bake_expand "$globals" "$*"
+}
+
+__bakeinst_main() {
+  case $1 in
+    --eval|--echo|-e)
+      shift
+      __bakeinst_expand "$*"
+      return 0 ;;
+
+    --list|-l)
+      __bakeinst_print_rules
+      __bakeinst_print_globals
+      return 0 ;;
+  esac
+
+  __bakeinst_define "$@"
+}
+
 Bake-instance usage.
 Most of the configuration is done after you create an instance; this function
 just takes the name of the instance you want to create.
 
 bake-instance() {
-local name=$1
-local prefix=__bake_$name
+  local name=$1
+  local prefix=__bake_$name
 
-if [[ $# != 1 ]]; then
-  echo "usage: bake-instance <instance-name>"
-  return 1
-fi
+  if [[ $# != 1 ]]; then
+    echo "usage: bake-instance <instance-name>"
+    return 1
+  fi
 
 State definitions.
 Every stateful definition in bake is represented as a rule, which has three
@@ -64,56 +542,46 @@ Note that bake assumes that any command attached to an ungrounded edge is cheap
 to execute. As such, these commands are not parallelized and ungrounded edges
 are executed speculatively and possibly multiple times.
 
-eval "
-# Grounded rules
-declare -a ${prefix}_g_out
-declare -a ${prefix}_g_in
-declare -a ${prefix}_g_commands
+  eval "
+  # Grounded rules
+  unset ${prefix}_g_out ${prefix}_g_in ${prefix}_g_commands
+  declare -a ${prefix}_g_out=()
+  declare -a ${prefix}_g_in=()
+  declare -a ${prefix}_g_commands=()
 
-# Ungrounded rules
-declare -a ${prefix}_u_out
-declare -a ${prefix}_u_in
-declare -a ${prefix}_u_commands
+  # Ungrounded rules
+  unset ${prefix}_u_out ${prefix}_u_in ${prefix}_u_commands
+  declare -a ${prefix}_u_out=()
+  declare -a ${prefix}_u_in=()
+  declare -a ${prefix}_u_commands=()
 
-# List of globals (so we can print them later)
-declare -a ${prefix}_globals
+  # List of globals (name v1 v2 v3 ... vn)
+  unset ${prefix}_globals
+  declare -a ${prefix}_globals=()
 
-# Configuration
-declare ${prefix}_exit_with=exit
-declare ${prefix}_backend=bake-backend-sha
-declare -a ${prefix}_init
-declare -a ${prefix}_finalize
+  # Configuration
+  declare ${prefix}_exit_with=return
+  declare ${prefix}_backend=bake-backend-sha
+  declare -a ${prefix}_init=()
+  declare -a ${prefix}_finalize=()
+  "
 
-# Inspection functions
-${prefix}_print_rules() {
-  local i
-  for (( i = 0; i < \${#${prefix}_g_out[@]}; ++i )); do
-    echo \${${prefix}_g_out[\$i]} : \\
-         \${${prefix}_g_in[\$i]} :: \\
-         \${${prefix}_g_command[\$i]}
+Function template instantiation.
+Every function beginning with `__bakeinst` is actually a template that we'll
+re-eval with proper closure references. Bash makes this extremely easy.
+
+  local fn
+  for fn in $(declare -f | grep '^__bakeinst' | sed 's/[^A-Za-z0-9_].*//'); do
+    local fn_source="$(declare -f $fn)"
+    eval "${fn_source//__bakeinst/$prefix}"
   done
 
-  for (( i = 0; i < \${#${prefix}_u_out[@]}; ++i )); do
-    echo \${${prefix}_u_out[\$i]} = \\
-         \${${prefix}_u_in[\$i]} :: \\
-         \${${prefix}_u_command[\$i]}
-  done
-}
+Entry point.
+Each bake function redirects to `__bakeinst_main`.
 
-${prefix}_print_globals() {
-  local g
-  for g in \"\${${prefix}_globals[@]}\"; do
-    echo -n %\$g =
-    eval \"echo \\\${${prefix}_global_\$g[@]}\"
-  done
-}
-"
-
-Variable handling logic.
-Code to bind and expand expressions with variables. This is optimized in some
-small ways by doing things like using bash wildcard matching as a preliminary
-check.
-
-
-
+  eval "
+  ${name}() {
+    ${prefix}_main \"\$@\"
+  }
+  "
 }
