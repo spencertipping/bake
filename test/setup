@@ -1,0 +1,18 @@
+#!/bin/bash
+# Setup script for unit tests
+
+. ../bake.sh
+bake-instance bake
+
+eq() {
+  echo -n "testing $1..."
+  local lhs=$(bake --eval $1)
+  local rhs=$2
+
+  if [[ "$lhs" != "$rhs" ]]; then
+    echo " failed: $lhs != $rhs"
+    exit 1
+  else
+    echo " pass"
+  fi
+}

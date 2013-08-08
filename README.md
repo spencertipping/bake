@@ -12,8 +12,8 @@ and runs the `bakefile` in the current directory.
 - Generality (track any kind of contents, not just files)
 - Parallel job execution
 - Remote job execution (requires passwordless SSH)
-- Can be used directly from the command line
-- You can use bake as a library from an existing script
+- Seamless integration with bash
+- You can type build rules at the command line
 - Dependency graphs are first-class (so you can ask bake how it would build
   something, then use that output from your script)
 - A build rule can have multiple declared outputs
@@ -22,14 +22,12 @@ and runs the `bakefile` in the current directory.
   want tracked file contents)
 - Single-file installation: `cp /path/to/bake ~/bin/` (or somewhere else in
   your $PATH)
-- Really simple syntax
 - Mathematically consistent semantics
 
 ## Non-features
 - No integration with autoconf, automake, etc
 - Less portable than GNU make (but it should work everywhere you're likely to
   need it)
-- Requires bash 3 or later
 - Written in bash
 
 ## bashrc usage
@@ -78,13 +76,13 @@ create_gcc_rule -debug -DDEBUG -g
 create_gcc_rule -opt   -O3
 
 # Rules to build executables
-bake %modules.c = *.c                   # destructuring bind
+bake %@modules.c = *.c                  # destructuring bind
 
 libs="-lc"
 ld_command="ld $libs %in -o %out"       # %in = all inputs, %out = all outputs
-bake %bin-opt   : %modules-opt.o   :: $ld_command
-bake %bin-debug : %modules-debug.o :: $ld_command
-bake %bin       : %modules.o       :: $ld_command
+bake %bin-opt   : %@modules-opt.o   :: $ld_command
+bake %bin-debug : %@modules-debug.o :: $ld_command
+bake %bin       : %@modules.o       :: $ld_command
 
 # Default build target
 bake : foo{,-debug,-opt}

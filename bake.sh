@@ -2,26 +2,26 @@
 # Bake function definition | Spencer Tipping
 # Licensed under the terms of the MIT source code license
 
-Introduction.
-Bake provides a single entry point, the `bake-instance` function. The global
-`bake-instance` function is a way to create bake instances, each of which is a
-function that operates on a dependency graph. Instances are isolated from each
-other. Because of this design, bake ends up compiling a new function each time
-you create an instance. Bash doesn't officially support closures, but we can
-come close by using eval to compile references to global names.
+# Introduction.
+# Bake provides a single entry point, the `bake-instance` function. The global
+# `bake-instance` function is a way to create bake instances, each of which is a
+# function that operates on a dependency graph. Instances are isolated from each
+# other. Because of this design, bake ends up compiling a new function each time
+# you create an instance. Bash doesn't officially support closures, but we can
+# come close by using eval to compile references to global names.
 
-An instance called "bake" is available to bakefiles. See
-[bake-template](./bake-template) for details about how this works.
+# An instance called "bake" is available to bakefiles. See
+# [bake-template](./bake-template) for details about how this works.
 
-Bash function recompilation.
-Bash has a horrible non-feature: any locals within a function are also local to
-functions you call, and they are mutable within those functions. This means
-local variables need to be script-unique in order to work properly (and even
-then they'll fail if you use recursion).
+# Bash function recompilation.
+# Bash has a horrible non-feature: any locals within a function are also local to
+# functions you call, and they are mutable within those functions. This means
+# local variables need to be script-unique in order to work properly (and even
+# then they'll fail if you use recursion).
 
-Rather than manually prefix each local with a unique string, we can write a
-bash function to find all local definitions and fix them up. Then we just write
-functions normally and hand them off to a recompiler.
+# Rather than manually prefix each local with a unique string, we can write a
+# bash function to find all local definitions and fix them up. Then we just write
+# functions normally and hand them off to a recompiler.
 
 declare __bake_locals_prefix=0
 declare __bake_locals_key=$(mktemp -u _XXXXXXXX)
@@ -68,46 +68,46 @@ __bake_fix_locals() {
   eval "$fn_source"
 }
 
-Variable handling logic.
-Code to bind and expand expressions with variables. This is optimized in some
-small ways by doing things like using bash wildcard matching as a preliminary
-check. This code can be global because it doesn't rely on any instance state.
+# Variable handling logic.
+# Code to bind and expand expressions with variables. This is optimized in some
+# small ways by doing things like using bash wildcard matching as a preliminary
+# check. This code can be global because it doesn't rely on any instance state.
 
-The first function we need is one that attempts to match a variable-laden
-template against some text. This function prints two space-separated values per
-matched variable: var-name and match-text. match-text may be empty, but if
-present it is safe to parse it into an array variable.
+# The first function we need is one that attempts to match a variable-laden
+# template against some text. This function prints two space-separated values per
+# matched variable: var-name and match-text. match-text may be empty, but if
+# present it is safe to parse it into an array variable.
 
-Here are some match cases:
+# Here are some match cases:
 
-| bake %@xs.c %@ys = foo.c bar.c bif    # %@xs = foo bar, %@ys = bif
-  bake %x.c %@xs.c = foo.c bar.c bif.c  # %x = foo, %@xs = bar bif
+# | bake %@xs.c %@ys = foo.c bar.c bif    # %@xs = foo bar, %@ys = bif
+#   bake %x.c %@xs.c = foo.c bar.c bif.c  # %x = foo, %@xs = bar bif
 
-Another set of cases involves cross-multiplication:
+# Another set of cases involves cross-multiplication:
 
-| bake %@x.%@y = foo.c bar.h            # no match
-  bake %@x.%y = foo.c bar.c             # %@x = foo bar, %@y = c
-  bake %@x.%@y = foo.c bar.c            # %@x = foo bar, %@y = c
-  bake %x.%@y = foo.c foo.h             # %@x = foo, %@y = c h
-  bake %@x.%@y = foo.c foo.h            # %@x = foo, %@y = c h
-  bake %x.%@y %z = foo.c bar.h          # %x = foo, %@y = c, %z = bar.h
+# | bake %@x.%@y = foo.c bar.h            # no match
+#   bake %@x.%y = foo.c bar.c             # %@x = foo bar, %@y = c
+#   bake %@x.%@y = foo.c bar.c            # %@x = foo bar, %@y = c
+#   bake %x.%@y = foo.c foo.h             # %@x = foo, %@y = c h
+#   bake %@x.%@y = foo.c foo.h            # %@x = foo, %@y = c h
+#   bake %x.%@y %z = foo.c bar.h          # %x = foo, %@y = c, %z = bar.h
 
-Bake does not collapse cross-multiplied values with the distributive property.
-Specifically, when matching multiple variables it will assume that at most one
-is plural:
+# Bake does not collapse cross-multiplied values with the distributive property.
+# Specifically, when matching multiple variables it will assume that at most one
+# is plural:
 
-| bake %@x.%@y = a.c a.d b.c b.d        # no match
+# | bake %@x.%@y = a.c a.d b.c b.d        # no match
 
-You can't reuse variables within a binding pattern, even if they are factored
-differently:
+# You can't reuse variables within a binding pattern, even if they are factored
+# differently:
 
-| bake %x %x = a a                      # error: bad pattern
-  bake %x.%y %x = a.c a                 # error: bad pattern
+# | bake %x %x = a a                      # error: bad pattern
+#   bake %x.%y %x = a.c a                 # error: bad pattern
 
-The first thing we need to do is be able to "factor" text. For example,
-factoring the string "foo bar.c bif.c" by the pattern "%.c" should give us two
-values, "bar.c bif.c" and "foo". `__bake_factor` does this, returning the two
-strings in __bake_return.
+# The first thing we need to do is be able to "factor" text. For example,
+# factoring the string "foo bar.c bif.c" by the pattern "%.c" should give us two
+# values, "bar.c bif.c" and "foo". `__bake_factor` does this, returning the two
+# strings in __bake_return.
 
 declare __bake_var_pattern="%(@?[A-Za-z0-9_]+)"
 declare -a __bake_return=()
@@ -283,9 +283,9 @@ __bake_match() {
   [[ -z $text ]]
 }
 
-String expansion.
-The opposite of variable binding. This logic is much simpler, too; there aren't
-many special cases involved.
+# String expansion.
+# The opposite of variable binding. This logic is much simpler, too; there aren't
+# many special cases involved.
 
 __bake_expand() {
   local oifs=$IFS
@@ -359,9 +359,9 @@ __bake_expand() {
   echo "${result[*]}"
 }
 
-Instance bookkeeping function templates.
-These are later rewritten to create an instance (hence the __bakeinst
-placeholders).
+# Instance bookkeeping function templates.
+# These are later rewritten to create an instance (hence the __bakeinst
+# placeholders).
 
 __bakeinst_print_rules() {
   local i
@@ -386,10 +386,10 @@ __bakeinst_print_globals() {
   done
 }
 
-Definition code templates.
-Functions to define rules and globals. This requires some argument parsing to
-happen ahead of time; that is, these functions expect their arguments to be
-positional and properly quoted.
+# Definition code templates.
+# Functions to define rules and globals. This requires some argument parsing to
+# happen ahead of time; that is, these functions expect their arguments to be
+# positional and properly quoted.
 
 __bakeinst_defgrounded() {
   local outvars=$1
@@ -447,26 +447,26 @@ __bakeinst_defglobal() {
   done
 }
 
-Dependency solver.
-There are some important assumptions we make in order to solve dependencies.
+# Dependency solver.
+# There are some important assumptions we make in order to solve dependencies.
 
-Interface layer.
-This is where we parse out stuff like `bake %foo.c = bar.c` into its underlying
-commands. Here are the rules we use:
+# Interface layer.
+# This is where we parse out stuff like `bake %foo.c = bar.c` into its underlying
+# commands. Here are the rules we use:
 
-| 1. If any option indicates a special command, then we use that.
-  2. Otherwise, and if there is no `:`, `=`, or `::`, then the user is telling
-     us we need to build something.
-  3. Otherwise, the user is defining something.
+# | 1. If any option indicates a special command, then we use that.
+#   2. Otherwise, and if there is no `:`, `=`, or `::`, then the user is telling
+#      us we need to build something.
+#   3. Otherwise, the user is defining something.
 
-Definition cases:
+# Definition cases:
 
-| 1. If we see `=`, no `::`, and the right-hand side can be expanded to a form
-     that contains no variables, then it's a global definition.
-  2. Otherwise, if we see `=`, then it's ungrounded.
-  3. Otherwise it's grounded.
+# | 1. If we see `=`, no `::`, and the right-hand side can be expanded to a form
+#      that contains no variables, then it's a global definition.
+#   2. Otherwise, if we see `=`, then it's ungrounded.
+#   3. Otherwise it's grounded.
 
-Here's the definition function, which takes all args from `bake`:
+# Here's the definition function, which takes all args from `bake`:
 
 __bakeinst_define() {
   local -a outvars=()
@@ -617,9 +617,9 @@ __bakeinst_main() {
   fi
 }
 
-Locals fixing.
-Before we call any bake functions, we need to recompile all of them to fix up
-their local variables (long story; see `__bake_fix_locals` for details).
+# Locals fixing.
+# Before we call any bake functions, we need to recompile all of them to fix up
+# their local variables (long story; see `__bake_fix_locals` for details).
 
 declare __bake_current_fn
 for __bake_current_fn in \
@@ -627,9 +627,9 @@ for __bake_current_fn in \
   __bake_fix_locals $__bake_current_fn
 done
 
-Bake-instance usage.
-Most of the configuration is done after you create an instance; this function
-just takes the name of the instance you want to create.
+# Bake-instance usage.
+# Most of the configuration is done after you create an instance; this function
+# just takes the name of the instance you want to create.
 
 bake-instance() {
   local name=$1
@@ -640,35 +640,35 @@ bake-instance() {
     return 1
   fi
 
-State definitions.
-Every stateful definition in bake is represented as a rule, which has three
-parts, or a global, which has one. Here's a rule:
+# State definitions.
+# Every stateful definition in bake is represented as a rule, which has three
+# parts, or a global, which has one. Here's a rule:
 
-| bake %x.o : %x.c :: gcc -c %in -o %out
-       |out|  |in|    |--- command ----|
+# | bake %x.o : %x.c :: gcc -c %in -o %out
+#        |out|  |in|    |--- command ----|
 
-And here's a global:
+# And here's a global:
 
-| bake %@modules.c %@others = *
+# | bake %@modules.c %@others = *
 
-You can't combine globals with locals. For example, you can't write this:
+# You can't combine globals with locals. For example, you can't write this:
 
-| bake %@modules.%ext = *.%ext          # invalid
+# | bake %@modules.%ext = *.%ext          # invalid
 
-The reason is that this definition wouldn't give a value to `%@modules`; it
-would just make `%@modules` a part of another rewriting rule (and somewhat
-counterintuitively, a literal). The rule is that the right-hand side of any
-global assignment must be fully-specified at definition time (though it can
-contain references to other global variables, as long as they are defined).
+# The reason is that this definition wouldn't give a value to `%@modules`; it
+# would just make `%@modules` a part of another rewriting rule (and somewhat
+# counterintuitively, a literal). The rule is that the right-hand side of any
+# global assignment must be fully-specified at definition time (though it can
+# contain references to other global variables, as long as they are defined).
 
-Like grounded rules, ungrounded rules can have commands:
+# Like grounded rules, ungrounded rules can have commands:
 
-| bake inputs-for-%x.o = %x.c %x.h :: echo "hi"
-       |---- out ----|   |- in --|    |command|
+# | bake inputs-for-%x.o = %x.c %x.h :: echo "hi"
+#        |---- out ----|   |- in --|    |command|
 
-Note that bake assumes that any command attached to an ungrounded edge is cheap
-to execute. As such, these commands are not parallelized and ungrounded edges
-are executed speculatively and possibly multiple times.
+# Note that bake assumes that any command attached to an ungrounded edge is cheap
+# to execute. As such, these commands are not parallelized and ungrounded edges
+# are executed speculatively and possibly multiple times.
 
   eval "
   # Grounded rules
@@ -697,9 +697,9 @@ are executed speculatively and possibly multiple times.
   declare -a ${prefix}_return=()
   "
 
-Function template instantiation.
-Every function beginning with `__bakeinst` is actually a template that we'll
-re-eval with proper closure references. Bash makes this extremely easy.
+# Function template instantiation.
+# Every function beginning with `__bakeinst` is actually a template that we'll
+# re-eval with proper closure references. Bash makes this extremely easy.
 
   local fn
   for fn in $(declare -f | grep '^__bakeinst' | sed 's/[^A-Za-z0-9_].*//'); do
@@ -707,8 +707,8 @@ re-eval with proper closure references. Bash makes this extremely easy.
     eval "${fn_source//__bakeinst/$prefix}"
   done
 
-Entry point.
-Each bake function redirects to `__bakeinst_main`.
+# Entry point.
+# Each bake function redirects to `__bakeinst_main`.
 
   eval "
   ${name}() {
@@ -716,3 +716,5 @@ Each bake function redirects to `__bakeinst_main`.
   }
   "
 }
+
+# Generated by SDoc

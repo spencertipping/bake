@@ -1,0 +1,39 @@
+#!/bin/bash
+# Tests for matching/expansion.
+
+. setup
+
+bake %x = 10
+eq %x 10
+
+bake %y = 6
+eq %x 10
+eq %y 6
+
+bake %@xs = 1 2 3
+eq %@xs '1 2 3'
+eq %@xs.%x '1.10 2.10 3.10'
+eq %@xs-%y '1-6 2-6 3-6'
+eq %@xs-%@xs '1-1 2-1 3-1 1-2 2-2 3-2 1-3 2-3 3-3'
+
+bake %x = 4
+eq %x 4
+
+bake %@xs.c = foo.c bar.c bif.c
+eq %@xs 'foo bar bif'
+
+bake %@xs.c %@ys.h = foo.c bar.c bif.h
+eq %@xs 'foo bar'
+eq %@ys 'bif'
+
+bake %@xs.%ext = foo.c bar.c bif.c
+eq %@xs 'foo bar bif'
+eq %ext 'c'
+
+bake %@xs.%@ext = foo.c foo.h foo.o
+eq %@xs 'foo'
+eq %@ext 'c h o'
+
+bake %@x.c %@xs.c = foo.c bar.c bif.c
+eq %@x 'foo'
+eq %@xs 'bar bif'

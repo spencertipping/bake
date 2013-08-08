@@ -1,0 +1,7 @@
+#!/bin/bash
+# Tests for matching/expansion.
+
+. setup
+
+bake deps-for-%x = %x.a %x.b
+eq deps-for-q 'q.a q.b'
