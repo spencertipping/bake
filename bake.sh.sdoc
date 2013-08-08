@@ -521,6 +521,16 @@ need to form a solution graph. For example:
           \   /
          common.h
 
+The key here is when common.h is grounded. At that point foo.c and foo.o are
+valid, as are bar.c and bar.o. Internally, we can represent this in a
+directional list working backwards from the initial goal set. Each goal is
+validated by one or more other goals in the list.
+
+What complicates matters is when we have a single file that is validated by
+multiple others.
+
+  local -a intermediate=()
+
   while (( ${#goals[@]} )); do
     local -a new_goals=()
   done
