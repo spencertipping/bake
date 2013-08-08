@@ -433,7 +433,71 @@ __bakeinst_defglobal() {
 }
 
 # Dependency solver.
-# There are some important assumptions we make in order to solve dependencies.
+# This is not easy. The reason is that we could easily have matching rules that
+# don't go anywhere useful. For example, consider a bakefile like this:
+
+# | bake %bin : %bin.o :: ld -lc -o %out %in
+#   bake %bin.o : %bin.c :: gcc -c -o %out %in
+
+# Everything matches the first rule. Bake needs to realize that to build "foo",
+# we need to use the first rule to expand "foo" into "foo.o", then use the second
+# rule to expand "foo.o" into "foo.c".
+
+# Bake can get around this easily enough by using a breadth-first search to
+# ground out all of its goals. The problem is that it doesn't necessarily have a
+# way to stop: `foo` turns into `foo.o`, which turns into `foo.c`, which could
+# turn into `foo.c.o`, etc. If you have a cyclic dependency graph, you also need
+# to define terminal cases, which are guaranteed to have no dependencies:
+
+# | bake %x.c :           # all C files are terminals; no need to explore further
+
+# Now bake has a way to remove .c files from the list of goals, and the search
+# will terminate. (It would terminate eventually anyway, but it would fail.) To
+# enforce this, bake first checks over the rules to make sure there is at least
+# one terminal if wildcard rules exist.
+
+# There are some subtleties as usual. For example, build rules can produce
+# multiple outputs. We deal with this by unifying the outvars of each build rule
+# against the entire goal set, and adding a catch-all to get the rest. One
+# consequence of this strategy is that the goals must be a superset of the files
+# that are generated; bake won't use multi-output rules that generate more than
+# you ask for.
+
+__bakeinst_solve() {
+  local solved_edge_fn=$1
+  local -a goals=( "${@:1}" )
+
+  local -a backtrace=()
+  local -a intermediates=()
+  local -a commands=()
+
+  # Precondition: if we have a match-everything rule, we also need at least one
+  # terminal rule.
+  local -a terminal_rules=()
+  local -a everything_rules=()
+
+  for i in ${!__bakeinst_u_out[@]}; do
+    # Look at the factor profile to detect everything-rules.
+    __bake_factor_profile "${__bakeinst_u_out[i]}"
+    local profile="${__bake_return[*]}"
+    [[ -n ${profile//[ %]/} ]] || everything_rules[${#everything_rules[@]}]=$i
+
+    # Terminal rules are easier: they have no inputs.
+    [[ -n ${__bakeinst_u_in[i]} ]] || terminal_rules[${#terminal_rules[@]}]=$i
+  done
+
+  if (( ${#everything_rules[@]} && !${#terminal_rules[@]} )); then
+    echo 'bake: error: attempted to solve a system with universal-match rules'
+    echo 'bake: but no terminal rules. This would result in a nonterminating'
+    echo 'bake: graph search. You need to add some terminal rules, for example'
+    echo 'bake:'
+    echo 'bake: $ bake %.c :'
+    echo 'bake: $ bake %.h :'
+    return 1
+  fi
+
+  # TODO
+}
 
 # Interface layer.
 # This is where we parse out stuff like `bake %foo.c = bar.c` into its underlying
@@ -587,6 +651,14 @@ __bakeinst_main() {
     --list|-l)
       __bakeinst_print_rules
       __bakeinst_print_globals
+      return 0 ;;
+
+    --terminal|-t)
+      shift
+      local arg
+      for arg in "$@"; do
+        __bakeinst_defgrounded "$arg" '' ''
+      done
       return 0 ;;
   esac
 

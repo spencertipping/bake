@@ -8,10 +8,9 @@ from other scripts. The `bake` wrapper script just loads this library into bash
 and runs the `bakefile` in the current directory.
 
 ## Features
-- Correctness (uses sha-256 to track contents, though you can change this)
 - Generality (track any kind of contents, not just files)
 - Parallel job execution
-- Remote job execution (requires passwordless SSH)
+- Remote job execution (requires passwordless SSH and sshfs)
 - Seamless integration with bash
 - You can type build rules at the command line
 - Dependency graphs are first-class (so you can ask bake how it would build
@@ -39,12 +38,14 @@ create a bake instance (a namespace for rules and globals):
 
 source ~/path/to/bake.sh
 bake-instance bk
+
+# a bake rule that will be available everywhere
+bk %x.o : %x.c :: gcc -o %out -c %in
 ```
 
 Then in your shell:
 
 ```sh
-$ bk %x.o : %x.c :: gcc -c %in -o %out
 $ bk foo.o              # compiles if necessary
 $
 ```
@@ -53,6 +54,7 @@ $
 ```sh
 #!/bin/bash
 bake %bin : %bin.c :: gcc -o %out %in
+bake %x.c :             # c files have no dependencies (this is important)
 ```
 
 You could then run `bake foo` to compile `foo.c` into `foo`.
@@ -70,6 +72,8 @@ create_gcc_rule() {
   bake %name$suffix.o : %name.c include/*.h \
     :: gcc "$@" %name.c -o %name$suffix.o
 }
+
+bake --terminal %.c %.h
 
 create_gcc_rule
 create_gcc_rule -debug -DDEBUG -g
