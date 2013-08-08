@@ -23,9 +23,6 @@ Rather than manually prefix each local with a unique string, we can write a
 bash function to find all local definitions and fix them up. Then we just write
 functions normally and hand them off to a recompiler.
 
-declare __bake_locals_prefix=0
-declare __bake_locals_key=$(mktemp -u _XXXXXXXX)
-
 __bake_fix_locals() {
   # Takes a function name and recompiles it in place.
   local fn_name=$1
@@ -41,31 +38,17 @@ __bake_fix_locals() {
     local_source=${BASH_REMATCH[3]}
   done
 
-  # Second step: replace each local within the source. The easiest way is to
-  # shell out to sed or some such, but that has major performance implications.
-  # Instead, use a destructuring loop like we did above.
-  local prefix=l$__bake_locals_key$(( bake_locals_prefix++ ))_
-  for l in "${locals[@]}"; do
-    # Here's what's going on here. Bash doesn't give us lazy matching, which is
-    # what we're really after; so we have to fake it. First, replace every
-    # occurrence of the variable to add the prefix. Then go back and fix up any
-    # replacement that happened not at a word boundary. (This is why our prefix
-    # needs to be unique.)
-    local replaced_source="${fn_source//$l/$prefix$l}"
-    local patch_pattern="([A-Za-z0-9_])$prefix$l"
-    fn_source=
+  if (( ${#locals[@]} )); then
+    # Second step: replace each local within the source. We can do this by
+    # building up a huge pattern for 'sed' and shelling out.
+    local prefix=$(mktemp -u l_XXXX_)
+    local oifs=$IFS
+    IFS='|'
+    local find_pattern="${locals[*]}"
+    IFS=$oifs
 
-    while [[ "$replaced_source" =~ $patch_pattern(.*)$ ]]; do
-      local prematch_length=$((${#replaced_source} - ${#BASH_REMATCH[0]}))
-      local prematch="${replaced_source:0:$prematch_length}"
-      fn_source="$fn_source$prematch${BASH_REMATCH[1]}$l"
-      replaced_source="${BASH_REMATCH[2]}"
-    done
-
-    fn_source="$fn_source$replaced_source"
-  done
-
-  eval "$fn_source"
+    eval "$(sed -r "s/\\b($find_pattern)\\b/$prefix\\1/g" <<<"$fn_source")"
+  fi
 }
 
 Variable handling logic.
@@ -109,8 +92,10 @@ factoring the string "foo bar.c bif.c" by the pattern "%.c" should give us two
 values, "bar.c bif.c" and "foo". `__bake_factor` does this, returning the two
 strings in __bake_return.
 
-declare __bake_var_pattern="%(@?[A-Za-z0-9_]+)"
-declare -a __bake_return=()
+__bake_setup_globals() {
+  __bake_var_pattern="%(@?[A-Za-z0-9_]+)"
+  __bake_return=()
+}
 
 __bake_factor() {
   local factor=$1
@@ -165,6 +150,7 @@ __bake_check_pattern() {
 __bake_match() {
   local -a vars=( $1 )
   local -a text=( $2 )
+  local -a result=()
 
   local -a profiles=()
   local i
@@ -262,21 +248,22 @@ __bake_match() {
 
     text=( "${remainder[@]}" )
 
-    # Print the bindings in the return-value format. Display only the unique
-    # values for each binding.
     for (( j = 0; j < namecount; ++j )); do
-      echo -n "${variable_names[j]}"
+      local binding_string="${variable_names[j]}"
 
       if (( j == plural_index )); then
         for (( k = j; k < ${#bindings[@]}; k += namecount )); do
-          echo -n " ${bindings[k]}"
+          binding_string="$binding_string ${bindings[k]}"
         done
       else
-         echo -n " ${bindings[j]}"
+        binding_string="$binding_string ${bindings[j]}"
       fi
-      echo
+
+      result[${#result[@]}]=$binding_string
     done
   done
+
+  __bake_return=( "${result[@]}" )
 
   # We shouldn't have any text left. If we do, then return 1; the match didn't
   # consume all of the text.
@@ -288,10 +275,10 @@ The opposite of variable binding. This logic is much simpler, too; there aren't
 many special cases involved.
 
 __bake_expand() {
-  local oifs=$IFS
-  IFS=$'\n'
+  local oifs=$IFS; IFS=$'\n'
   local -a bindings=( $1 )
   IFS=$oifs
+
   local -a text=( $2 )
 
   local -a names=()
@@ -356,7 +343,7 @@ __bake_expand() {
     result=( "${result[@]}" "${expansion[@]}" )
   done
 
-  echo "${result[*]}"
+  __bake_return=( "${result[@]}" )
 }
 
 Instance bookkeeping function templates.
@@ -414,14 +401,8 @@ __bakeinst_defglobal() {
   local value=$2
 
   # IFS needs to be its usual value when we call __bake_match
-  local match_result="$(__bake_match "$name" "$value" || echo $?)"
-
-  local oifs=$IFS
-  IFS=$'\n'
-  local -a bindings=( $match_result )
-  IFS=$oifs
-
-  case "${bindings[*]}" in
+  __bake_match "$name" "$value"
+  case $? in
     1) echo "bake: $name failed to match $value"
        return 1 ;;
     2) echo "bake: $name is not a valid pattern (repeated variable)"
@@ -430,6 +411,10 @@ __bakeinst_defglobal() {
        echo "bake: please file an issue: github.com/spencertipping/bake"
        return 1 ;;
   esac
+
+  local oifs=$IFS; IFS=$'\n'
+  local -a bindings=( "${__bake_return[@]}" )
+  IFS=$oifs
 
   local b
   for b in "${bindings[@]}"; do
@@ -520,8 +505,9 @@ __bakeinst_define() {
     local globals="${__bakeinst_globals[@]}"
     IFS=$oifs
 
-    local expanded_rhs="$(__bake_expand "$globals" "${invars[*]}")"
+    __bake_expand "$globals" "${invars[*]}"
 
+    local expanded_rhs="${__bake_return[*]}"
     if [[ ${expanded_rhs/%/} == $expanded_rhs && -z $grounded \
                                               && -z $cmd ]]; then
       # No expanded stuff and no cmd; probably a global.
@@ -544,8 +530,7 @@ __bakeinst_should_define() {
 }
 
 __bakeinst_expand() {
-  local oifs=$IFS
-  IFS=$'\n'
+  local oifs=$IFS; IFS=$'\n'
   local globals="${__bakeinst_globals[*]}"
   IFS=$oifs
 
@@ -555,7 +540,8 @@ __bakeinst_expand() {
     expanded=
 
     # First expand out all globals.
-    local -a new_val=$(__bake_expand "$globals" "$val")
+    __bake_expand "$globals" "$val"
+    local new_val="${__bake_return[*]}"
     [[ $new_val != $val ]] && expanded=1
     val=$new_val
 
@@ -563,16 +549,19 @@ __bakeinst_expand() {
     # replacement and execute the associated command if there is one.
     local _i
     for _i in ${!__bakeinst_u_out[@]}; do
-      
-      local match="$(__bake_match "${__bakeinst_u_out[_i]}" "$val" || echo 1)"
+      if __bake_match "${__bakeinst_u_out[_i]}" "$val"; then
+        local oifs=$IFS; IFS=$'\n'
+        local match="${__bake_return[*]}"
+        IFS=$oifs
 
-      if [[ "${match[*]}" != 1 ]]; then
         # More bindings for the command. %in is the full incoming text, which
         # for us is just $val. %out is $new_val; that is, the replaced version.
-        local replacement="$(__bake_expand "$match" "${__bakeinst_u_in[i]}")"
-        local cmd_text="$(__bake_expand \
-          "$match"$'\n'"in $val"$'\n'"out $replacement" \
-          "${__bakeinst_u_commands[i]}")"
+        __bake_expand "$match" "${__bakeinst_u_in[i]}"
+        local replacement="${__bake_return[*]}"
+
+        __bake_expand "$match"$'\n'"in $val"$'\n'"out $replacement" \
+                      "${__bakeinst_u_commands[i]}"
+        local cmd_text="${__bake_return[*]}"
 
         if eval "${cmd_text:-:}"; then
           # Everything worked; commit the result.
@@ -592,6 +581,7 @@ __bakeinst_main() {
     --eval|--echo|-e)
       shift
       __bakeinst_expand "$*"
+      echo "${__bakeinst_return[*]}"
       return 0 ;;
 
     --list|-l)
@@ -626,6 +616,20 @@ for __bake_current_fn in \
     $(declare -f | egrep '^__bake' | sed 's/[^A-Za-z0-9_].*//'); do
   __bake_fix_locals $__bake_current_fn
 done
+
+It takes a long time to fix up all of the locals, so we want to do this ahead
+of time and compile the result into a whole new script. All of the state is
+encapsulated into functions beginning with __bake. Assuming we're in a clean
+environment, all we need to do is grab the values of all of these definitions
+and echo them. This will become the new precompiled script.
+
+__bake_recompiled() {
+  local f
+  for f in $(declare -f | egrep '^__bake' | sed 's/[^A-Za-z0-9_].*//'); do
+    declare -f $f
+  done
+  declare -f bake-instance
+}
 
 Bake-instance usage.
 Most of the configuration is done after you create an instance; this function
@@ -711,6 +715,7 @@ Entry point.
 Each bake function redirects to `__bakeinst_main`.
 
   eval "
+  __bake_setup_globals
   ${name}() {
     ${prefix}_main \"\$@\"
   }
