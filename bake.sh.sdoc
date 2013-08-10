@@ -23,13 +23,19 @@ Rather than manually prefix each local with a unique string, we can write a
 bash function to find all local definitions and fix them up. Then we just write
 functions normally and hand them off to a recompiler.
 
-__bake_fix_locals() {
+__bake_setup_globals() {
+  __bake_var_pattern="%(@?[A-Za-z0-9_]+)"
+  __bake_return=()
+  __bake_macro_names=()
+  __bake_macro_values=()
+}
+
+__bake_recompile() {
   # Takes a function name and recompiles it in place.
   local fn_name=$1
   local fn_source="$(declare -f $fn_name)"
 
-  # First step: build a list of local variables. Note that we don't handle
-  # multiple local definitions here; that's a huge rabbit hole.
+  # Give every local variable a unique prefix.
   local local_source="$fn_source"
   local local_pattern="\blocal +(-[a-zA-Z]+ +)*([A-Za-z0-9_]+)"
   local -a locals=()
@@ -39,11 +45,8 @@ __bake_fix_locals() {
   done
 
   if (( ${#locals[@]} )); then
-    # Second step: replace each local within the source. We can do this by
-    # building up a huge pattern for 'sed' and shelling out.
     local prefix=$(mktemp -u l_XXXX_)
-    local oifs=$IFS
-    IFS='|'
+    local oifs=$IFS; IFS='|'
     local find_pattern="${locals[*]}"
     IFS=$oifs
 
@@ -91,11 +94,6 @@ The first thing we need to do is be able to "factor" text. For example,
 factoring the string "foo bar.c bif.c" by the pattern "%.c" should give us two
 values, "bar.c bif.c" and "foo". `__bake_factor` does this, returning the two
 strings in __bake_return.
-
-__bake_setup_globals() {
-  __bake_var_pattern="%(@?[A-Za-z0-9_]+)"
-  __bake_return=()
-}
 
 __bake_factor() {
   local factor=$1
@@ -471,9 +469,6 @@ that are generated; bake won't use multi-output rules that generate more than
 you ask for.
 
 __bakeinst_solve() {
-  local solved_edge_fn=$1
-  local -a goals=( "${@:1}" )
-
   # Precondition: if we have a match-everything rule, we also need at least one
   # terminal rule.
   local -a terminal_rules=()
@@ -488,8 +483,9 @@ __bakeinst_solve() {
 
     # Figure out whether the rule produces a single output. If so, we can use a
     # much faster (linear speedup) matching algorithm.
-    [[ ${outvars//%@/} == $outvars && ${profile/ /} == $profile ]]
-    rule_is_unary+=( "$?" )
+    local unary=
+    [[ ${outvars//%@/} == $outvars && ${profile/ /} == $profile ]] && unary=1
+    rule_is_unary+=( "$unary" )
 
     # Look at the factor profile to detect everything-rules.
     if [[ -z ${profile//[ %]/} ]]; then
@@ -515,7 +511,18 @@ __bakeinst_solve() {
     return 1
   fi
 
+  # Figure out what the user is asking for by running the stated goals through
+  # the evaluator.
+  __bakeinst_expand "$*"
+  local -a goals=( "${__bakeinst_return[*]}" )
+  local goal_size_limit=$(( 64 + ${#goals[@]} ** 3 ))
+
 Search algorithm.
+The backend isn't invoked during the graph search. Instead, bake uses the
+backend to identify opportunities to reuse steps scheduled in the solution.
+This means we can build out the solution without any backend interaction at
+all (and, in fact, we need to due to the way bake works).
+
 We're starting with the outputs and want to find a grounding path for each one.
 The very first thing to do, at every iteration, is to eliminate any goals
 matched by terminal rules. Doing this allows us to commit the intermediate
@@ -650,12 +657,23 @@ if we found an alternative way to build `my-program-name`, failing to build
   local -a terminal_and_unary=()
   local -a terminal_and_not_unary=()
 
+  local -a nonterminal_and_unary=()
+  local -a nonterminal_and_not_unary=()
+
   local i
   for i in ${terminal_rules[@]}; do
-    if (( ${rule_is_unary[i]} )); then
-      terminal_and_unary+=( $i )
+    if [[ -n ${rule_is_unary[i]} ]]; then
+      terminal_and_unary+=( "$i" )
     else
-      terminal_and_not_unary+=( $i )
+      terminal_and_not_unary+=( "$i" )
+    fi
+  done
+
+  for i in ${nonterminal_rules[@]}; do
+    if [[ -n ${rule_is_unary[i]} ]]; then
+      nonterminal_and_unary+=( "$i" )
+    else
+      nonterminal_and_not_unary+=( "$i" )
     fi
   done
 
@@ -703,7 +721,7 @@ if we found an alternative way to build `my-program-name`, failing to build
         local -a bindings=( ${__bake_return[@]} )
         IFS=$oifs
 
-        __bake_expand "$bindings" "${__bakeinst_g_out[j]}"
+        __bake_expand "$bindings" "${__bakeinst_g_out[j]}"      # no %@__rest
         local -a expansion=( ${__bake_return[@]} )
         for word in ${expansion[@]}; do
           local index=-1
@@ -718,6 +736,8 @@ if we found an alternative way to build `my-program-name`, failing to build
           if (( index == -1 )); then
             echo 'bake: internal error (reexpansion failed)'
             echo 'bake: please file an issue: github.com/spencertipping/bake'
+            echo "bake: when filing, include this text:"
+            echo "bake: $word :: ${goals[@]}"
             return 1
           fi
 
@@ -726,6 +746,7 @@ if we found an alternative way to build `my-program-name`, failing to build
       fi
     done
 
+    # Propagate grounding again.
     local cursor=0
     while (( cursor < ${#newly_grounded[@]} )); do
       local i=${newly_grounded[cursor]}
@@ -747,7 +768,19 @@ if we found an alternative way to build `my-program-name`, failing to build
       [[ -n ${ungrounded[i]} ]] && still_ungrounded+=( "$i" )
     done
 
-    # TODO: nonterminal rule search
+    if (( ${#still_ungrounded[@]} )); then
+      # Try to match a unary rule against each still-ungrounded goal.
+      local g
+      for g in ${still_ungrounded[@]}; do
+        local i
+        for i in ${nonterminal_and_unary[@]}; do
+          if __bake_match "${__bakeinst_g_out[i]}" "$g"; then
+            # Add expansions unless already present.
+            :
+          fi
+        done
+      done
+    fi
   done
 }
 
@@ -933,12 +966,12 @@ __bakeinst_main() {
 
 Locals fixing.
 Before we call any bake functions, we need to recompile all of them to fix up
-their local variables (long story; see `__bake_fix_locals` for details).
+their local variables (long story; see `__bake_recompile` for details).
 
 declare __bake_current_fn
 for __bake_current_fn in \
     $(declare -f | egrep '^__bake' | sed 's/[^A-Za-z0-9_].*//'); do
-  __bake_fix_locals $__bake_current_fn
+  __bake_recompile $__bake_current_fn
 done
 
 It takes a long time to fix up all of the locals, so we want to do this ahead
