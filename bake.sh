@@ -816,16 +816,15 @@ __bakeinst_define() {
     __bakeinst_default="${invars[*]}"
   else
     # Is it a global? Try expanding the RHS (invars) to see.
-    local oifs=$IFS
-    IFS=$'\n'
-    local globals="${__bakeinst_globals[@]}"
+    local oifs=$IFS; IFS=$'\n'
+    local globals="${__bakeinst_globals[*]}"
     IFS=$oifs
 
     __bake_expand "$globals" "${invars[*]}"
 
     local expanded_rhs="${__bake_return[*]}"
-    if [[ ${expanded_rhs/%/} == $expanded_rhs && -z $grounded \
-                                              && -z $cmd ]]; then
+    if [[ ${expanded_rhs//%/} == $expanded_rhs && -z $grounded \
+                                               && -z $cmd ]]; then
       # No expanded stuff and no cmd; probably a global.
       __bakeinst_defglobal "${outvars[*]}" "$expanded_rhs"
     elif [[ -n $grounded ]]; then
@@ -863,9 +862,9 @@ __bakeinst_expand() {
 
     # Now try each ungrounded rule. If we find one that matches, do the
     # replacement and execute the associated command if there is one.
-    local _i
-    for _i in ${!__bakeinst_u_out[@]}; do
-      if __bake_match "${__bakeinst_u_out[_i]}" "$val"; then
+    local i
+    for i in ${!__bakeinst_u_out[@]}; do
+      if __bake_match "${__bakeinst_u_out[i]}" "$val"; then
         local oifs=$IFS; IFS=$'\n'
         local match="${__bake_return[*]}"
         IFS=$oifs
@@ -881,15 +880,16 @@ __bakeinst_expand() {
 
         if eval "${cmd_text:-:}"; then
           # Everything worked; commit the result.
+          expanded=
+          [[ $replacement != $val ]] && expanded=1
           val=$replacement
-          expanded=1
           break
         fi
       fi
     done
   done
 
-  __bakeinst_return=$val
+  __bakeinst_return=( "$val" )
 }
 
 __bakeinst_main() {
