@@ -5,3 +5,18 @@
 
 bake deps-for-%x = %x.a %x.b
 eq deps-for-q 'q.a q.b'
+
+bake foo = bar
+eq foo bar
+
+if false; then
+  # This all fails with infinite looping (probably a bug)
+  bake fib[x]     = x
+  bake fib[xx]    = xx
+  bake fib[xx%xs] = fib[x%xs] fib[%xs]
+
+  eq fib[x]    x
+  eq fib[xx]   xx
+  eq fib[xxx]  xx x
+  eq fib[xxxx] xx x xx
+fi

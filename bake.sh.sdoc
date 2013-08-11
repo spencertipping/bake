@@ -830,11 +830,14 @@ __bakeinst_define() {
     IFS=$oifs
 
     __bake_expand "$globals" "${invars[*]}"
-
     local expanded_rhs="${__bake_return[*]}"
-    if [[ ${expanded_rhs//%/} == $expanded_rhs && -z $grounded \
-                                               && -z $cmd ]]; then
-      # No expanded stuff and no cmd; probably a global.
+
+    if [[ ${expanded_rhs//%/} == $expanded_rhs \
+       && "${outvars[*]/%/}" != "${outvars[*]//%/}" \
+       && -z $grounded \
+       && -z $cmd ]]; then
+      # No expanded stuff, no command, and no vars on the left-hand side; looks
+      # like a global definition.
       __bakeinst_defglobal "${outvars[*]}" "$expanded_rhs"
     elif [[ -n $grounded ]]; then
       __bakeinst_defgrounded "${outvars[*]}" "${invars[*]}" "$cmd"
