@@ -133,14 +133,13 @@ __bake_check_pattern() {
   done
 
   # Check for duplicate references to any variable.
-  for (( i = 0; i < ${#unique_variables[@]}; ++i )); do
+  local i
+  for i in ${!unique_variables[@]}; do
     local this_var=${unique_variables[i]}
     local j
     for (( j = i + 1;
            j < ${#unique_variables[@]}; ++j )); do
-      if [[ $this_var == ${unique_variables[j]} ]]; then
-        return 1
-      fi
+      [[ $this_var == ${unique_variables[j]} ]] && return 1
     done
   done
 }
@@ -448,18 +447,8 @@ __bakeinst_defglobal() {
 # we need to use the first rule to expand "foo" into "foo.o", then use the second
 # rule to expand "foo.o" into "foo.c".
 
-# Bake can get around this easily enough by using a breadth-first search to
-# ground out all of its goals. The problem is that it doesn't necessarily have a
-# way to stop: `foo` turns into `foo.o`, which turns into `foo.c`, which could
-# turn into `foo.c.o`, etc. If you have a cyclic dependency graph, you also need
-# to define terminal cases, which are guaranteed to have no dependencies:
-
-# | bake %x.c :           # all C files are terminals; no need to explore further
-
-# Now bake has a way to remove .c files from the list of goals, and the search
-# will terminate. (It would terminate eventually anyway, but it would fail.) To
-# enforce this, bake first checks over the rules to make sure there is at least
-# one terminal if wildcard rules exist.
+# As it turns out, this is the only possible way to get from `foo` to `foo.c`.
+# Bake won't apply a rule to its own inputs.
 
 # There are some subtleties as usual. For example, build rules can produce
 # multiple outputs. We deal with this by unifying the outvars of each build rule
@@ -469,8 +458,6 @@ __bakeinst_defglobal() {
 # you ask for.
 
 __bakeinst_solve() {
-  # Precondition: if we have a match-everything rule, we also need at least one
-  # terminal rule.
   local -a terminal_rules=()
   local -a nonterminal_rules=()
   local -a everything_rules=()
@@ -499,17 +486,6 @@ __bakeinst_solve() {
       fi
     fi
   done
-
-  if (( ${#everything_rules[@]} && !${#terminal_rules[@]} )); then
-    echo 'bake: error: attempted to solve a system with universal-match rules'
-    echo 'bake: but no terminal rules. This would result in a nonterminating'
-    echo 'bake: graph search. You need to add some terminal rules, for example'
-    echo 'bake:'
-    echo 'bake: $ bake --terminal %x.c %x.h'
-    echo 'bake:'
-    echo "bake: This will inform bake that *.c and *.h have no dependencies."
-    return 1
-  fi
 
   # Figure out what the user is asking for by running the stated goals through
   # the evaluator.
@@ -776,6 +752,7 @@ __bakeinst_solve() {
         for i in ${nonterminal_and_unary[@]}; do
           if __bake_match "${__bakeinst_g_out[i]}" "$g"; then
             # Add expansions unless already present.
+            :
           fi
         done
       done
