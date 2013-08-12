@@ -1,0 +1,36 @@
+#!/bin/bash
+# Bash feature benchmarking
+
+. ../../bake.sh
+
+bench() {
+  local fn=$(mktemp -u fn_XXXXX)
+  eval "$fn() { $*; }"
+
+  echo "benchmarking $fn() { $*; }..."
+
+  local i
+  for (( i = 0; i < 4; ++i )); do
+    local j
+    { time for (( j = 0; j < 100; ++j )); do
+      $fn
+    done 1>&2; } 2>&1 | grep '^user'
+  done
+
+  unset $fn
+}
+
+bench "__bake_match '%x %@rest'  'foo bar bif'"
+bench "__bake_match '%@rest'     'foo bar bif'"
+bench "__bake_match 'foo %@rest' 'foo bar bif'"
+bench "__bake_match 'bif %@rest' 'foo bar bif'"
+
+bench "__bake_match '%x %@rest'  'foo bar bif baz bok quux duck'"
+bench "__bake_match '%@rest'     'foo bar bif baz bok quux duck'"
+bench "__bake_match 'foo %@rest' 'foo bar bif baz bok quux duck'"
+bench "__bake_match 'bif %@rest' 'foo bar bif baz bok quux duck'"
+
+bench "__bake_match '%x.c %@rest'  'foo.c bar bif.c'"
+bench "__bake_match '%@rest'       'foo.c bar bif.c'"
+bench "__bake_match 'foo.c %@rest' 'foo.c bar bif.c'"
+bench "__bake_match 'bif.c %@rest' 'foo.c bar bif.c'"

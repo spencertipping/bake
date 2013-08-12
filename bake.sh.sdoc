@@ -26,8 +26,6 @@ functions normally and hand them off to a recompiler.
 __bake_setup_globals() {
   __bake_var_pattern="%(@?[A-Za-z0-9_]+)"
   __bake_return=()
-  __bake_macro_names=()
-  __bake_macro_values=()
 }
 
 __bake_recompile() {
@@ -952,6 +950,9 @@ for __bake_current_fn in \
     $(declare -f | egrep '^__bake' | sed 's/[^A-Za-z0-9_].*//'); do
   __bake_recompile $__bake_current_fn
 done
+
+# In case someone uses bake without first creating an instance
+__bake_setup_globals
 
 It takes a long time to fix up all of the locals, so we want to do this ahead
 of time and compile the result into a whole new script. All of the state is
