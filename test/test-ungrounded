@@ -9,14 +9,22 @@ eq deps-for-q 'q.a q.b'
 bake foo = bar
 eq foo bar
 
-if :; then
-  # This all fails with infinite looping (probably a bug)
-  bake fib[x]     = x
-  bake fib[xx]    = xx
-  bake fib[xx%xs] = fib[x%xs] fib[%xs]
+bake foo 5 = 6
+eq 'foo 5' 6
+eq '5 foo' 6
 
-  eq fib[x]    x
-  eq fib[xx]   xx
-  eq fib[xxx]  xx x
-  eq fib[xxxx] xx x xx
-fi
+bake inout-%x = %x :: bake z.%out = z.%in
+eq inout-7 7
+
+# TODO: make this test work
+eq z.inout-5 z.5
+
+# TODO: make these tests work (currently fib[x] -> fib[x], not x)
+bake fib[x]     = x
+bake fib[xx]    = xx
+bake fib[xx%xs] = fib[x%xs] fib[%xs]
+
+eq fib[x]    x
+eq fib[xx]   xx
+eq fib[xxx]  xx x
+eq fib[xxxx] xx x xx

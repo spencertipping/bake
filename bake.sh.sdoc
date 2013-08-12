@@ -143,6 +143,9 @@ __bake_check_pattern() {
 }
 
 __bake_match() {
+  # Note: this function is much slower than it could be. There's a refactor
+  # pending; see doc/matching.md for details.
+
   local -a vars=( $1 )
   local -a text=( $2 )
   local -a result=()
@@ -555,27 +558,38 @@ __bakeinst_define() {
       echo 'bake: cannot combine a command with the default build rule'
       return 1
     fi
-    __bakeinst_default="${invars[*]}"
+
+    __bakeinst_expand "${invars[*]}"
+    __bakeinst_default="${__bakeinst_return[*]}"
   else
     # Is it a global? Try expanding the RHS (invars) to see.
     local oifs=$IFS; IFS=$'\n'
     local globals="${__bakeinst_globals[*]}"
     IFS=$oifs
 
+    # Note that global-expansion happens at compile time, for both the left and
+    # right sides, whenever possible. This prevents us from having to consider
+    # globals when expanding other quantities.
+    __bake_expand "$globals" "${outvars[*]}"
+    local expanded_lhs="${__bake_return[*]}"
+
     __bake_expand "$globals" "${invars[*]}"
     local expanded_rhs="${__bake_return[*]}"
 
+    __bake_expand "$globals" "$cmd"
+    local expanded_cmd="${__bake_return[*]}"
+
     if [[ "${expanded_rhs//%/}" == "$expanded_rhs" \
-       && "${outvars[*]/%/}" != "${outvars[*]//%/}" \
+       && "${expanded_lhs/%/}" != "${expanded_lhs//%/}" \
        && -z $grounded \
        && -z $cmd ]]; then
       # No expanded stuff, no command, and no vars on the left-hand side; looks
       # like a global definition.
-      __bakeinst_defglobal "${outvars[*]}" "$expanded_rhs"
+      __bakeinst_defglobal "$expanded_lhs" "$expanded_rhs"
     elif [[ -n $grounded ]]; then
-      __bakeinst_defgrounded "${outvars[*]}" "${invars[*]}" "$cmd"
+      __bakeinst_defgrounded "$expanded_lhs" "$expanded_rhs" "$expanded_cmd"
     else
-      __bakeinst_defungrounded "${outvars[*]}" "${invars[*]}" "$cmd"
+      __bakeinst_defungrounded "$expanded_lhs" "$expanded_rhs" "$expanded_cmd"
     fi
   fi
 }
@@ -599,14 +613,16 @@ __bakeinst_expand() {
   while [[ -n $expanded ]]; do
     expanded=
 
-    # First expand out all globals.
+    # First expand out all globals in the incoming expression.
     __bake_expand "$globals" "$val"
     local new_val="${__bake_return[*]}"
     [[ $new_val != "$val" ]] && expanded=1
     val=$new_val
 
     # Now try each ungrounded rule. If we find one that matches, do the
-    # replacement and execute the associated command if there is one.
+    # replacement and execute the associated command if there is one. Note that
+    # these matches don't mention globals at all; doing so is unnecessary
+    # because all globals in the rewriting rules have been expanded already.
     local i
     for i in ${!__bakeinst_u_out[@]}; do
       if __bake_match "${__bakeinst_u_out[i]}" "$val"; then
@@ -619,7 +635,7 @@ __bakeinst_expand() {
         __bake_expand "$match" "${__bakeinst_u_in[i]}"
         local replacement="${__bake_return[*]}"
 
-        __bake_expand "$match"$'\n'"in $val"$'\n'"out $replacement" \
+        __bake_expand "$match"$'\n'"in $replacement"$'\n'"out $val" \
                       "${__bakeinst_u_commands[i]}"
         local cmd_text="${__bake_return[*]}"
 

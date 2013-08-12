@@ -143,6 +143,9 @@ __bake_check_pattern() {
 }
 
 __bake_match() {
+  # Note: this function is much slower than it could be. There's a refactor
+  # pending; see doc/matching.md for details.
+
   local -a vars=( $1 )
   local -a text=( $2 )
   local -a result=()
@@ -489,274 +492,8 @@ __bakeinst_solve() {
   # Figure out what the user is asking for by running the stated goals through
   # the evaluator.
   __bakeinst_expand "$*"
-  local -a goals=( "${__bakeinst_return[*]}" )
+  local -a goals=( "${__bakeinst_return[@]}" )
   local goal_size_limit=$(( 64 + ${#goals[@]} ** 3 ))
-
-# Search algorithm.
-# The backend isn't invoked during the graph search. Instead, bake uses the
-# backend to identify opportunities to reuse steps scheduled in the solution.
-# This means we can build out the solution without any backend interaction at
-# all (and, in fact, we need to due to the way bake works).
-
-# We're starting with the outputs and want to find a grounding path for each one.
-# The very first thing to do, at every iteration, is to eliminate any goals
-# matched by terminal rules. Doing this allows us to commit the intermediate
-# solutions for those goals, which is ultimately how we end up solving the
-# system. (And if a goal is terminal, then we want to prefer that solution to any
-# re-expansion.)
-
-# As we work down the tree, we build out a disjunctive list of requirements. This
-# list stores the concrete dependencies for each given goal; if all of the
-# dependencies are met, then the goal is grounded. For example, consider this
-# bakefile:
-
-# | bake %@modules = foo bar bif
-#   bake %bin      = my-program-name
-#   bake --terminal %x.sdoc
-#   bake : %bin
-#   bake %bin        : %@modules.o    :: ld -lc -o %out %in
-#   bake %x.o        : %x.c           :: gcc -c %in -o %out
-#   bake %x.o        : %x.lisp %x.li  :: compile-lisp %x.lisp -l %x.li -o %out
-#   bake %x.%ext     : %x.%ext.sdoc   :: 'sdoc cat code.%ext::%in > %out'
-#   bake {foo,bar}.c : foo-bar.c.sdoc :: sdoc --split %in
-
-# And these files:
-
-# | $ ls
-#   bar.lisp.sdoc  bar.li.sdoc  foo-and-bar.c.sdoc
-#   $
-
-# Here's the solution bake needs to come up with:
-
-# | bar.lisp.sdoc -> bar.lisp -> bar.o
-#   bar.li.sdoc   -> bar.li --/        \
-#                                       \
-#                   /-> bif.c -> bif.o --+-- my-program-name
-#  foo-bar.c.sdoc -+--> foo.c -> foo.o -/
-
-# Notice that there are two kinds of merge points: those where one input splits
-# to multiple outputs, and those where multiple inputs converge to a single
-# output. It's also possible to have a many-to-many rule like this:
-
-# | bake foo.o bar.o : foo.c bar.c :: ...
-
-# However it's possible to reduce many-to-many rules to a simpler form:
-
-# | bake foo.o bar.o : <gensym> :: ...
-#   bake <gensym> : foo.c bar.c
-
-# So many-to-many rules don't create any new conceptual challenges.
-
-# Ok, so given all of this, here's how bake solves it. First, we make a list of
-# goals, which in this case is the default of %bin (= my-program-name). This list
-# grows, but we keep track of which ones were originally specified so we can fail
-# if we can't ground all of them.
-
-# We kick off the solution process by matching our goal list against the output
-# variables of each rule. If we find a match, we expand the corresponding input
-# variables, adding each as a new entry in the goals[] array. We then record the
-# index of the rule and the indexes of each new goals[] entry. This becomes one
-# way to build the goal, so we store it into the disjunctions array and add the
-# new index to the goal-resolution array. By example:
-
-# Initially we have nothing except for an unmet goal:
-
-# | ungrounded=(1) expansion_indexes=(-1) goals=(my-program-name)
-#   goal_resolution=() disjunctions=()
-
-# Then we run my-program-name through the first rule to get object file
-# dependencies:
-
-# | ungrounded=(1 1 1 1)
-#   expansion_indexes=(0 -1 -1 -1)
-#   goals=(my-program-name foo.o bar.o bif.o)
-#   disjunctions=("1 2 3")
-#   goal_resolution=("0 0")
-#   reverse_index=("" "0" "0" "0")
-
-# Expand every goal again under its next possible expansion (using
-# `expansion_indexes` to store the continuations of the breadth-first search):
-
-# | ungrounded=(1 1 1 1 1 1 1)
-#   expansion_indexes=(5 0 0 0 -1 -1 -1)
-#   goals=(my-program-name foo.o bar.o bif.o foo.c bar.c bif.c)
-#   disjunctions=("1 2 3" "4" "5" "6")
-#   goal_resolution=("0 0" "1 1" "1 2" "1 3")
-#   reverse_index=("" "0" "0" "0" "1" "2" "3")
-
-# The next expansion is where we start to see interesting stuff happen. The
-# continuations for the object files produce disjunctions:
-
-# | ungrounded=(1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1)
-#   expansion_indexes=(5 1 1 1 3 3 3 -1 -1 -1 -1 -1 -1 -1 -1 -1)
-#   goals=(my-program-name foo.o bar.o bif.o foo.c bar.c bif.c    # 0..6
-#          foo.lisp foo.li bar.lisp bar.li bif.lisp bif.li        # 7..12
-#          foo.c.sdoc bar.c.sdoc bif.c.sdoc)                      # 13..15
-#   disjunctions=("1 2 3" "4" "5" "6" "7 8" "9 10" "11 12"        # 0..6
-#                 "13" "14" "15")                                 # 7..9
-#   goal_resolution=("0 0" "1 1 4" "1 2 5" "1 3 6" "3 7" "3 8" "3 9")
-#   reverse_index=("" "0" "0" "0" "1" "2" "3" "1" "1" "2" "2" "3" "3"
-#                     "4" "5" "6")
-
-# And so forth. Bake will be able to ground out rules when a goal is terminal and
-# when the backend says it is valid to do so. (This, by the way, is why it's so
-# important to have terminal rules; otherwise the search is infinite by
-# definition.)
-
-# A few things to note about this setup. First, bake has to re-scan the list of
-# goals each time a new one is added. If we're adding a goal we're already in the
-# process of solving, we just refer back to the existing one.
-
-# Another optimization, though less crucial than goal unification, is that we
-# keep a reverse index from dependencies to anyone who refers to them. This is
-# analogous to maintaining parent-links in a breadth-first search tree. The idea
-# is that we propagate grounding upwards rather than rescanning every goal at
-# every iteration. This reduces the time spent solving very broad search spaces
-# and reduces worst-case complexity by a linear factor (I think, anyway).
-
-# Note that the user may ask for two things that depend on each other. For
-# exmaple, they could type `bake foo.o my-program-name`, which is technically
-# redundant. Even if they do this, it's still just fine for us to treat `foo.o`
-# and `my-program-name` as independent goals; and in fact we have to because even
-# if we found an alternative way to build `my-program-name`, failing to build
-# `foo.o` would mean that the operation had failed.
-
-  local required_goals=${#goals[@]}
-
-  local -a ungrounded=( ${goals[@]/*/1} )
-  local -a expansion_indexes=( ${goals[@]/*/-1} )
-  local -a disjunctions=()
-  local -a goal_resolution=()
-  local -a reverse_index=( "${goals[@]/*/}" )
-
-  local -a terminal_and_unary=()
-  local -a terminal_and_not_unary=()
-
-  local -a nonterminal_and_unary=()
-  local -a nonterminal_and_not_unary=()
-
-  local i
-  for i in ${terminal_rules[@]}; do
-    if [[ -n ${rule_is_unary[i]} ]]; then
-      terminal_and_unary+=( "$i" )
-    else
-      terminal_and_not_unary+=( "$i" )
-    fi
-  done
-
-  for i in ${nonterminal_rules[@]}; do
-    if [[ -n ${rule_is_unary[i]} ]]; then
-      nonterminal_and_unary+=( "$i" )
-    else
-      nonterminal_and_not_unary+=( "$i" )
-    fi
-  done
-
-  while (( ${#ungrounded[@]:0:$required_goals} )); do
-    # First identify terminal rules and mark them as being grounded. Follow
-    # them upwards, marking any dependencies. Grounding is obviously
-    # commutative, so optimize by using unary rules first.
-    local -a newly_grounded=()
-    local i
-    for i in ${!goals[@]}; do
-      if [[ -n ${ungrounded[i]} ]]; then
-        local g=${goals[i]}
-        local j
-        for j in ${terminal_and_unary[@]}; do
-          if __bake_match "${__bakeinst_g_out[j]}" "$g"; then
-            newly_grounded+=( "$i" )
-            break
-          fi
-        done
-      fi
-    done
-
-    # Propagate grounding. This code duplication will make common cases way,
-    # way faster.
-    local cursor=0
-    while (( cursor < ${#newly_grounded[@]} )); do
-      local i=${newly_grounded[cursor]}
-      (( ++cursor ))
-
-      ungrounded[$i]=
-
-      local j
-      for j in ${reverse_index[i]}; do
-        [[ -n ${ungrounded[j]} ]] && newly_grounded+=( "$j" )
-      done
-    done
-
-    # Same thing here, but with non-unary rules.
-    local -a newly_grounded=()
-    local i
-    for i in ${terminal_and_not_unary[@]}; do
-      if __bake_match "${__bakeinst_g_out[j]} %@__rest" "${goals[*]}"; then
-        # Ground out the matched goals.
-        local oifs=$IFS; IFS=$'\n'
-        local -a bindings=( ${__bake_return[@]} )
-        IFS=$oifs
-
-        __bake_expand "$bindings" "${__bakeinst_g_out[j]}"      # no %@__rest
-        local -a expansion=( ${__bake_return[@]} )
-        for word in ${expansion[@]}; do
-          local index=-1
-          local j
-          for j in ${!goals[@]}; do
-            if [[ ${goals[j]} == "$word" ]]; then
-              index=$j
-              break
-            fi
-          done
-
-          if (( index == -1 )); then
-            echo 'bake: internal error (reexpansion failed)'
-            echo 'bake: please file an issue: github.com/spencertipping/bake'
-            echo "bake: when filing, include this text:"
-            echo "bake: $word :: ${goals[@]}"
-            return 1
-          fi
-
-          [[ -n ${ungrounded[index]} ]] && newly_grounded+=( "$index" )
-        done
-      fi
-    done
-
-    # Propagate grounding again.
-    local cursor=0
-    while (( cursor < ${#newly_grounded[@]} )); do
-      local i=${newly_grounded[cursor]}
-      (( ++cursor ))
-
-      ungrounded[$i]=
-
-      local j
-      for j in ${reverse_index[i]}; do
-        [[ -n ${ungrounded[j]} ]] && newly_grounded+=( "$j" )
-      done
-    done
-
-    # Ok, now we're done with the easy cases. If we still have any goals left,
-    # start running them through nonterminal rules.
-    local -a still_ungrounded=()
-    local i
-    for i in ${!goals[@]}; do
-      [[ -n ${ungrounded[i]} ]] && still_ungrounded+=( "$i" )
-    done
-
-    if (( ${#still_ungrounded[@]} )); then
-      # Try to match a unary rule against each still-ungrounded goal.
-      local g
-      for g in ${still_ungrounded[@]}; do
-        local i
-        for i in ${nonterminal_and_unary[@]}; do
-          if __bake_match "${__bakeinst_g_out[i]}" "$g"; then
-            # Add expansions unless already present.
-            :
-          fi
-        done
-      done
-    fi
-  done
 }
 
 # Interface layer.
@@ -821,27 +558,38 @@ __bakeinst_define() {
       echo 'bake: cannot combine a command with the default build rule'
       return 1
     fi
-    __bakeinst_default="${invars[*]}"
+
+    __bakeinst_expand "${invars[*]}"
+    __bakeinst_default="${__bakeinst_return[*]}"
   else
     # Is it a global? Try expanding the RHS (invars) to see.
     local oifs=$IFS; IFS=$'\n'
     local globals="${__bakeinst_globals[*]}"
     IFS=$oifs
 
+    # Note that global-expansion happens at compile time, for both the left and
+    # right sides, whenever possible. This prevents us from having to consider
+    # globals when expanding other quantities.
+    __bake_expand "$globals" "${outvars[*]}"
+    local expanded_lhs="${__bake_return[*]}"
+
     __bake_expand "$globals" "${invars[*]}"
     local expanded_rhs="${__bake_return[*]}"
 
+    __bake_expand "$globals" "$cmd"
+    local expanded_cmd="${__bake_return[*]}"
+
     if [[ "${expanded_rhs//%/}" == "$expanded_rhs" \
-       && "${outvars[*]/%/}" != "${outvars[*]//%/}" \
+       && "${expanded_lhs/%/}" != "${expanded_lhs//%/}" \
        && -z $grounded \
        && -z $cmd ]]; then
       # No expanded stuff, no command, and no vars on the left-hand side; looks
       # like a global definition.
-      __bakeinst_defglobal "${outvars[*]}" "$expanded_rhs"
+      __bakeinst_defglobal "$expanded_lhs" "$expanded_rhs"
     elif [[ -n $grounded ]]; then
-      __bakeinst_defgrounded "${outvars[*]}" "${invars[*]}" "$cmd"
+      __bakeinst_defgrounded "$expanded_lhs" "$expanded_rhs" "$expanded_cmd"
     else
-      __bakeinst_defungrounded "${outvars[*]}" "${invars[*]}" "$cmd"
+      __bakeinst_defungrounded "$expanded_lhs" "$expanded_rhs" "$expanded_cmd"
     fi
   fi
 }
@@ -865,14 +613,16 @@ __bakeinst_expand() {
   while [[ -n $expanded ]]; do
     expanded=
 
-    # First expand out all globals.
+    # First expand out all globals in the incoming expression.
     __bake_expand "$globals" "$val"
     local new_val="${__bake_return[*]}"
     [[ $new_val != "$val" ]] && expanded=1
     val=$new_val
 
     # Now try each ungrounded rule. If we find one that matches, do the
-    # replacement and execute the associated command if there is one.
+    # replacement and execute the associated command if there is one. Note that
+    # these matches don't mention globals at all; doing so is unnecessary
+    # because all globals in the rewriting rules have been expanded already.
     local i
     for i in ${!__bakeinst_u_out[@]}; do
       if __bake_match "${__bakeinst_u_out[i]}" "$val"; then
@@ -885,7 +635,7 @@ __bakeinst_expand() {
         __bake_expand "$match" "${__bakeinst_u_in[i]}"
         local replacement="${__bake_return[*]}"
 
-        __bake_expand "$match"$'\n'"in $val"$'\n'"out $replacement" \
+        __bake_expand "$match"$'\n'"in $replacement"$'\n'"out $val" \
                       "${__bakeinst_u_commands[i]}"
         local cmd_text="${__bake_return[*]}"
 

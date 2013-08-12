@@ -11,8 +11,14 @@ eq() {
 
   if [[ "$lhs" != "$rhs" ]]; then
     echo " failed: $lhs != $rhs"
+    echo "current bindings:"
+    bake -l
     exit 1
   else
     echo " pass"
   fi
+}
+
+reset() {
+  bake-instance bake
 }

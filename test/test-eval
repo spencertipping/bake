@@ -17,23 +17,28 @@ eq %@xs-%y '1-6 2-6 3-6'
 eq %@xs-%@xs '1-1 2-1 3-1 1-2 2-2 3-2 1-3 2-3 3-3'
 
 bake %x = 4
-eq %x 4
+eq 10 4
 
+reset
 bake %@xs.c = foo.c bar.c bif.c
 eq %@xs 'foo bar bif'
 
+reset
 bake %@xs.c %@ys.h = foo.c bar.c bif.h
 eq %@xs 'foo bar'
 eq %@ys 'bif'
 
+reset
 bake %@xs.%ext = foo.c bar.c bif.c
 eq %@xs 'foo bar bif'
 eq %ext 'c'
 
+reset
 bake %@xs.%@ext = foo.c foo.h foo.o
 eq %@xs 'foo'
 eq %@ext 'c h o'
 
+reset
 bake %@x.c %@xs.c = foo.c bar.c bif.c
 eq %@x 'foo'
 eq %@xs 'bar bif'
