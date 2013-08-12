@@ -1,21 +1,21 @@
 #!/bin/bash
+bake %@sdocs.sdoc = *.sdoc
+
 sdoc_to_markdown() {
   sdoc cat markdown::$1.sdoc > $1.md
 }
-
-sdoc_to_code() {
-  sdoc cat code::$1.sdoc > $1
-}
-
 bake %x.md : %x.sdoc :: sdoc_to_markdown %x
-bake %x    : %x.sdoc :: sdoc_to_code %x
+bake doc : %@sdocs.md
 
 create_bake() {
   cat bake.sh bake-template > bake
   chmod +x bake
 }
 
-bake %@sdocs.sdoc = *.sdoc
+compile_bake_sh() {
+  sdoc cat code.sh::bake.sh.sdoc > bake1.sh
+  { echo '#!/bin/bash'; bash -c '. bake1.sh; __bake_recompiled'; } > bake.sh
+}
 
-bake bake : bake.sh bake-template :: create_bake
-bake : bake bake.sh %@sdocs.md
+bake bake.sh : bake.sh.sdoc          :: compile_bake_sh
+bake bake    : bake.sh bake-template :: create_bake
