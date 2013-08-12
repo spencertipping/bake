@@ -23,6 +23,11 @@ bench 'local x=$((1 + 1))'
 bench 'local x=0; ((++x))'
 bench 'local x=5; ((x += x))'
 
+bench 'eval "local x=10"'
+bench 'eval "local x=$((1 + 1))"'
+bench 'eval "local x=0; ((++x))"'
+bench 'eval "local x=5; ((x += x))"'
+
 bench 'local -a xs=(); xs+=(1 2 3)'
 bench 'local -a xs=(1 2 3)'
 bench 'local -a xs=("1" "2" "3")'

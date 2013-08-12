@@ -137,7 +137,7 @@ __bake_check_pattern() {
     local j
     for (( j = i + 1;
            j < ${#unique_variables[@]}; ++j )); do
-      [[ $this_var == ${unique_variables[j]} ]] && return 1
+      [[ $this_var == "${unique_variables[j]}" ]] && return 1
     done
   done
 }
@@ -217,7 +217,7 @@ __bake_match() {
           # Note that we need to be dealing with a plural variable (i.e. one
           # that starts with @) in order to consider plurality a viable option.
 
-          if [[ ${bindings[j]} != $binding_value ]]; then
+          if [[ ${bindings[j]} != "$binding_value" ]]; then
             if [[ ${variable_names[j]:0:1} == @ && $plural_index == -1 ]]; then
               plural_index=$j
             else
@@ -310,7 +310,7 @@ __bake_expand() {
         local var_name=${BASH_REMATCH[2]:1}
         local found_var=
         for i in ${!names[@]}; do
-          if [[ ${names[i]} == $var_name ]]; then
+          if [[ ${names[i]} == "$var_name" ]]; then
             # Expand and multiply.
             local -a value=( ${values[i]} )
             local -a new_expansion=()
@@ -425,7 +425,7 @@ __bakeinst_defglobal() {
     local index=${#__bakeinst_globals[@]}
     for i in ${!__bakeinst_globals[@]}; do
       local gname=${__bakeinst_globals[i]}
-      if [[ ${gname%% *} == $varname ]]; then
+      if [[ ${gname%% *} == "$varname" ]]; then
         index=$i
         break
       fi
@@ -469,7 +469,8 @@ __bakeinst_solve() {
     # Figure out whether the rule produces a single output. If so, we can use a
     # much faster (linear speedup) matching algorithm.
     local unary=
-    [[ ${outvars//%@/} == $outvars && ${profile/ /} == $profile ]] && unary=1
+    [[ ${outvars//%@/} == "$outvars" && ${profile/ /} == "$profile" ]] \
+      && unary=1
     rule_is_unary+=( "$unary" )
 
     # Look at the factor profile to detect everything-rules.
@@ -701,7 +702,7 @@ __bakeinst_solve() {
           local index=-1
           local j
           for j in ${!goals[@]}; do
-            if [[ ${goals[j]} == $word ]]; then
+            if [[ ${goals[j]} == "$word" ]]; then
               index=$j
               break
             fi
@@ -830,7 +831,7 @@ __bakeinst_define() {
     __bake_expand "$globals" "${invars[*]}"
     local expanded_rhs="${__bake_return[*]}"
 
-    if [[ ${expanded_rhs//%/} == $expanded_rhs \
+    if [[ "${expanded_rhs//%/}" == "$expanded_rhs" \
        && "${outvars[*]/%/}" != "${outvars[*]//%/}" \
        && -z $grounded \
        && -z $cmd ]]; then
@@ -867,7 +868,7 @@ __bakeinst_expand() {
     # First expand out all globals.
     __bake_expand "$globals" "$val"
     local new_val="${__bake_return[*]}"
-    [[ $new_val != $val ]] && expanded=1
+    [[ $new_val != "$val" ]] && expanded=1
     val=$new_val
 
     # Now try each ungrounded rule. If we find one that matches, do the
@@ -891,7 +892,7 @@ __bakeinst_expand() {
         if eval "${cmd_text:-:}"; then
           # Everything worked; commit the result.
           expanded=
-          [[ $replacement != $val ]] && expanded=1
+          [[ $replacement != "$val" ]] && expanded=1
           val=$replacement
           break
         fi

@@ -9,7 +9,7 @@ eq deps-for-q 'q.a q.b'
 bake foo = bar
 eq foo bar
 
-if false; then
+if :; then
   # This all fails with infinite looping (probably a bug)
   bake fib[x]     = x
   bake fib[xx]    = xx
