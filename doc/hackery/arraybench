@@ -20,7 +20,8 @@ bench() {
 
 declare -a xs=(a b c d)                 # will contain 65536 elements
 declare i
-for (( i = 0; i < 14; ++i )); do
+echo 'setting up array of 65536 elements...'
+time for (( i = 0; i < 14; ++i )); do
   xs+=( "${xs[@]}" )
 done
 
@@ -28,4 +29,62 @@ bench 'local x=${xs[0]} y=${xs[0]}'
 bench 'local x=${xs[1024]} y=${xs[0]}'
 bench 'local x=${xs[4096]} y=${xs[0]}'
 bench 'local x=${xs[16384]} y=${xs[0]}'
-bench 'local x=${xs[65535]} y=${xs[0]}'
+# bench 'local x=${xs[65535]} y=${xs[0]}'
+
+# Same thing, but this time using indirection against global vars
+echo 'setting up 64 vars...'
+time for (( i = 0; i < 16; ++i )); do
+  eval declare xs_$((i << 2 | 0))=a
+  eval declare xs_$((i << 2 | 1))=b
+  eval declare xs_$((i << 2 | 2))=c
+  eval declare xs_$((i << 2 | 3))=d
+done
+
+bench 'local x=${xs_0} y=${xs_0}'
+bench 'local x=${xs_32} y=${xs_0}'
+
+bench 'local x=$xs_0 y=$xs_0'
+bench 'local x=$xs_32 y=$xs_0'
+
+bench 'local i=xs_0; local x=${!i} y=$xs_0'
+bench 'local i=xs_32; local x=${!i} y=$xs_0'
+
+echo 'setting up 65536 vars...'
+time for (( i = 0; i < 16384; ++i )); do
+  eval declare xs_$((i << 2 | 0))=a
+  eval declare xs_$((i << 2 | 1))=b
+  eval declare xs_$((i << 2 | 2))=c
+  eval declare xs_$((i << 2 | 3))=d
+done
+
+bench 'local x=${xs_0} y=${xs_0}'
+bench 'local x=${xs_16384} y=${xs_0}'
+bench 'local x=${xs_65535} y=${xs_0}'
+
+bench 'local x=$xs_0 y=$xs_0'
+bench 'local x=$xs_16384 y=$xs_0'
+bench 'local x=$xs_65535 y=$xs_0'
+
+bench 'local i=xs_0; local x=${!i} y=$xs_0'
+bench 'local i=xs_16384; local x=${!i} y=$xs_0'
+bench 'local i=xs_65536; local x=${!i} y=$xs_0'
+
+echo 'setting up 524288 vars...'
+time for (( i = 0; i < 131072; ++i )); do
+  eval declare xs_$((i << 2 | 0))=a
+  eval declare xs_$((i << 2 | 1))=b
+  eval declare xs_$((i << 2 | 2))=c
+  eval declare xs_$((i << 2 | 3))=d
+done
+
+bench 'local x=${xs_0} y=${xs_0}'
+bench 'local x=${xs_131072} y=${xs_0}'
+bench 'local x=${xs_524287} y=${xs_0}'
+
+bench 'local x=$xs_0 y=$xs_0'
+bench 'local x=$xs_131072 y=$xs_0'
+bench 'local x=$xs_524287 y=$xs_0'
+
+bench 'local i=xs_0; local x=${!i} y=$xs_0'
+bench 'local i=xs_131072; local x=${!i} y=$xs_0'
+bench 'local i=xs_524287; local x=${!i} y=$xs_0'
