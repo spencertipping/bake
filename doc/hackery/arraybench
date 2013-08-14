@@ -1,0 +1,31 @@
+#!/bin/bash
+# Bash feature benchmarking
+
+bench() {
+  local fn=$(mktemp -u fn_XXXXX)
+  eval "$fn() { $*; }"
+
+  echo "benchmarking $*..."
+
+  local i
+  for (( i = 0; i < 4; ++i )); do
+    local j
+    { time for (( j = 0; j < 10000; ++j )); do
+      $fn
+    done 1>&2; } 2>&1 | grep '^user'
+  done
+
+  unset $fn
+}
+
+declare -a xs=(a b c d)                 # will contain 65536 elements
+declare i
+for (( i = 0; i < 14; ++i )); do
+  xs+=( "${xs[@]}" )
+done
+
+bench 'local x=${xs[0]} y=${xs[0]}'
+bench 'local x=${xs[1024]} y=${xs[0]}'
+bench 'local x=${xs[4096]} y=${xs[0]}'
+bench 'local x=${xs[16384]} y=${xs[0]}'
+bench 'local x=${xs[65535]} y=${xs[0]}'
