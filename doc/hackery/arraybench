@@ -27,7 +27,9 @@ done
 
 bench 'local x=${xs[0]} y=${xs[0]}'
 bench 'local x=${xs[1024]} y=${xs[0]}'
+bench 'local x=${xs[1024]}'
 bench 'local x=${xs[4096]} y=${xs[0]}'
+bench 'local x=${xs[16384]}'
 bench 'local x=${xs[16384]} y=${xs[0]}'
 # bench 'local x=${xs[65535]} y=${xs[0]}'
 
