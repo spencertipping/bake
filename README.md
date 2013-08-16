@@ -1,5 +1,9 @@
 # bake: `make` in bash
-**NOTE: work in progress**
+**NOTE: work no longer in progress.** Due to bash's [truly horrendous
+performance
+characteristics](http://spencertipping.com/posts/2013.0814.bash-is-irrecoverably-broken.html),
+I've canceled this project and will instead be working a version for zsh. Most
+of the details will be the same, but it will probably be considerably faster.
 
 `bake` is a simple bash setup that lets you write makefile-style automation in
 bash. Like GNU make, it does dependency analysis and topsorting, and it
