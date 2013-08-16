@@ -1,20 +1,12 @@
-#!/bin/bash
-# Bash feature benchmarking
+#!/usr/bin/zsh
+# zsh feature benchmarking
 
 bench() {
   local fn=$(mktemp -u fn_XXXXX)
   eval "$fn() { $*; }"
 
   echo "benchmarking $*..."
-
-  local i
-  for (( i = 0; i < 4; ++i )); do
-    local j
-    { time for (( j = 0; j < 10000; ++j )); do
-      $fn
-    done 1>&2; } 2>&1 | grep '^user'
-  done
-
+  repeat 4 { time (repeat 10000 $fn) }
   unset $fn
 }
 
